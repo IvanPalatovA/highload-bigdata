@@ -2,7 +2,7 @@
   "type": "record",
   "name": "Event",
   "namespace": "stand",
-  "doc": "Схема события публичной активности GitHub (GH Archive, Вариант 93)",
+  "doc": "Схема события публичной активности GitHub (GH Archive, Вариант 93, Версия 2)",
   "fields": [
     {
       "name": "event_key",
@@ -103,6 +103,12 @@
       "type": ["null", "string"],
       "default": null,
       "doc": "Тип инициатора действия (user или deploy_key)"
+    },
+    {
+      "name": "actor_avatar_url",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "URL аватара пользователя GitHub (поле источника, добавленное в Schema v2)"
     }
   ]
 }
