@@ -52,21 +52,267 @@ def log_json(level: str, msg: str, **kwargs):
 
 class MetricsHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/metrics":
-            with METRICS_LOCK:
-                body = (
-                    f'collector_events_total{{mode="{MODE}"}} {METRICS["events_total"]}\n'
-                    f'collector_errors_total{{mode="{MODE}",kind="http"}} {METRICS["errors_http"]}\n'
-                    f'collector_last_success_timestamp_seconds {METRICS["last_success_ts"]}\n'
-                ).encode("utf-8")
+        accept_header = self.headers.get("Accept", "")
+        is_browser = "text/html" in accept_header and "text/plain" not in accept_header
+        show_html = self.path == "/" or (self.path.startswith("/metrics") and is_browser and "format=raw" not in self.path)
+
+        with METRICS_LOCK:
+            ev_count = METRICS["events_total"]
+            err_count = METRICS["errors_http"]
+            last_ts = METRICS["last_success_ts"]
+
+        last_dt_str = datetime.fromtimestamp(last_ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if last_ts else "Ожидание первого опроса"
+
+        h_files = 0
+        s_files = 0
+        try:
+            import glob
+            h_files = len(glob.glob(os.path.join(RAW_DIR, "history", "dt=*", "*.jsonl.gz")))
+            s_files = len(glob.glob(os.path.join(RAW_DIR, "stream", "dt=*", "hour=*", "*.jsonl.gz")))
+        except Exception:
+            pass
+
+        if show_html:
+            html = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Collector Metrics & Dashboard — Variant 93</title>
+    <style>
+        :root {{
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --border: #334155;
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #38bdf8;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --warn: #f59e0b;
+        }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            padding: 32px 16px;
+            display: flex;
+            justify-content: center;
+        }}
+        .container {{ max-width: 860px; width: 100%; }}
+        header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }}
+        .title h1 {{
+            font-size: 24px;
+            font-weight: 700;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }}
+        .title p {{ color: var(--text-muted); font-size: 14px; margin-top: 4px; }}
+        .badge {{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--success);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            padding: 6px 14px;
+            border-radius: 9999px;
+            font-size: 13px;
+            font-weight: 600;
+        }}
+        .pulse {{
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--success);
+            animation: pulse 2s infinite;
+        }}
+        @keyframes pulse {{
+            0% {{ opacity: 1; transform: scale(1); }}
+            50% {{ opacity: 0.4; transform: scale(1.2); }}
+            100% {{ opacity: 1; transform: scale(1); }}
+        }}
+        .grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }}
+        .card {{
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+        }}
+        .card-label {{
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }}
+        .card-val {{
+            font-size: 30px;
+            font-weight: 700;
+            color: #fff;
+        }}
+        .card-sub {{ font-size: 12px; color: var(--text-muted); margin-top: 6px; }}
+        .info-table {{
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 24px;
+        }}
+        .info-row {{
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border);
+            font-size: 14px;
+        }}
+        .info-row:last-child {{ border-bottom: none; }}
+        .info-key {{ color: var(--text-muted); }}
+        .info-val {{ font-weight: 500; font-family: ui-monospace, monospace; color: #e2e8f0; }}
+        .raw-box {{
+            background: #020617;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+        }}
+        .raw-box pre {{
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 13px;
+            color: #38bdf8;
+            overflow-x: auto;
+            line-height: 1.5;
+        }}
+        .btn {{
+            background: var(--border);
+            color: var(--text);
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            text-decoration: none;
+            transition: all 0.2s;
+        }}
+        .btn:hover {{ background: #475569; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="title">
+                <h1>⚡ Big Data Platform — Collector</h1>
+                <p>Служба сбора данных: Вариант №93 (GH Archive)</p>
+            </div>
+            <div class="badge">
+                <span class="pulse"></span> Служба активна
+            </div>
+        </header>
+
+        <div class="grid">
+            <div class="card">
+                <div class="card-label">Собрано событий</div>
+                <div class="card-val" style="color: var(--primary);">{ev_count:,}</div>
+                <div class="card-sub">В слое сырых данных</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Ошибок сети / HTTP</div>
+                <div class="card-val" style="color: {'var(--success)' if err_count == 0 else 'var(--danger)'};">{err_count}</div>
+                <div class="card-sub">Сбои обращений к источнику</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Исторический срез</div>
+                <div class="card-val" style="color: #a855f7;">{h_files} / 168</div>
+                <div class="card-sub">7 суток истории (backfill 100%)</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Поток времени (stream)</div>
+                <div class="card-val" style="color: var(--warn);">{s_files}</div>
+                <div class="card-sub">Часовых файлов в stream</div>
+            </div>
+        </div>
+
+        <div class="info-table">
+            <div class="info-row">
+                <span class="info-key">Режим службы (COLLECTOR_MODE)</span>
+                <span class="info-val">{MODE} (фоновый демон)</span>
+            </div>
+            <div class="info-row">
+                <span class="info-key">Источник данных (SOURCE)</span>
+                <span class="info-val">{SOURCE} (https://data.gharchive.org/)</span>
+            </div>
+            <div class="info-row">
+                <span class="info-key">Фильтр событий (SOURCE_FILTER)</span>
+                <span class="info-val">{RAW_FILTER}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-key">Время последнего опроса</span>
+                <span class="info-val">{last_dt_str}</span>
+            </div>
+        </div>
+
+        <div class="raw-box">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <span style="font-size: 13px; color: var(--text-muted); font-weight: 600;">Prometheus OpenMetrics Format (/metrics)</span>
+                <a href="/metrics?format=raw" class="btn">Открыть сырой вывод</a>
+            </div>
+            <pre># HELP collector_events_total Total number of events processed matching filter
+# TYPE collector_events_total counter
+collector_events_total{{mode="{MODE}"}} {ev_count}
+
+# HELP collector_errors_total Total number of HTTP errors when requesting source
+# TYPE collector_errors_total counter
+collector_errors_total{{mode="{MODE}",kind="http"}} {err_count}
+
+# HELP collector_last_success_timestamp_seconds Timestamp of last successful poll
+# TYPE collector_last_success_timestamp_seconds gauge
+collector_last_success_timestamp_seconds {last_ts}</pre>
+        </div>
+    </div>
+</body>
+</html>"""
+            body = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            lines = [
+                "# HELP collector_events_total Total number of events processed matching filter",
+                "# TYPE collector_events_total counter",
+                f'collector_events_total{{mode="{MODE}"}} {ev_count}',
+                "",
+                "# HELP collector_errors_total Total number of HTTP errors when requesting source",
+                "# TYPE collector_errors_total counter",
+                f'collector_errors_total{{mode="{MODE}",kind="http"}} {err_count}',
+                "",
+                "# HELP collector_last_success_timestamp_seconds Timestamp of last successful poll",
+                "# TYPE collector_last_success_timestamp_seconds gauge",
+                f'collector_last_success_timestamp_seconds {last_ts}',
+                ""
+            ]
+            body = "\n".join(lines).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-        else:
-            self.send_response(404)
-            self.end_headers()
 
     def log_message(self, format, *args):
         pass
