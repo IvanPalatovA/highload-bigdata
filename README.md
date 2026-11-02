@@ -1,3 +1,98 @@
+# Шпаргалка для сдачи ЛР4 преподавателю
+
+Команды запускаются из корня репозитория стенда (`stand`). Все сервисы уже настроены и запущены.
+
+---
+
+### Шаг 0. Проверить, что стенд работает
+```bash
+docker compose ps
+```
+*Что видит препод*: работают контейнеры `s3` (SeaweedFS), `catalog` (Lakekeeper REST Catalog), `catalog-db` (Postgres).
+
+---
+
+### Шаг 1. Показать таблицу и общее количество строк в DuckDB
+```bash
+docker compose run --rm duckdb -init init.sql -c "SELECT count(*) AS total_rows FROM lake.clean.events;"
+```
+*Результат*: `139530` строк (7 дней истории + потоковые порции).
+
+---
+
+### Шаг 2. Главная фишка Iceberg: Отсечение файлов по предикату (Predicate Pushdown)
+Преподаватель обязательно спросит: *"Докажи, что при фильтрации читаются не все файлы"*.
+
+**Запрос 1: БЕЗ фильтра (читаются все файлы таблицы)**
+```bash
+docker compose run --rm duckdb -init init.sql -c "EXPLAIN ANALYZE SELECT type, count(*) FROM lake.clean.events GROUP BY 1;"
+```
+*Что показать преподу*: строку `Total Files Read: 12`. Движок прочитал все 12 суточных файлов.
+
+**Запрос 2: С фильтром по дате `event_time` (читается ровно 1 файл!)**
+```bash
+docker compose run --rm duckdb -init init.sql -c "EXPLAIN ANALYZE SELECT type, count(*) FROM lake.clean.events WHERE event_time >= TIMESTAMPTZ '2026-10-10 00:00:00' AND event_time < TIMESTAMPTZ '2026-10-11 00:00:00' GROUP BY 1;"
+```
+*Что показать преподу*: строку `Total Files Read: 1` (обработано 16 904 строки).
+*Объяснение*: скрытое партиционирование `days(event_time)` отсекает 11 файлов на уровне метаданных манифеста, S3 даже не опрашивается!
+
+---
+
+### Шаг 3. Показать снимки таблицы (Snapshots) в Spark
+```bash
+docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT snapshot_id, committed_at, operation FROM lake.clean.events.snapshots;"
+```
+*Что показать*: список снимков (история изменений таблицы).
+
+---
+
+### Шаг 4. Time Travel (Путешествие во времени)
+Запрос к историческому состоянию таблицы (например, к первому снимку после загрузки истории):
+```bash
+docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT count(*) FROM lake.clean.events VERSION AS OF 3125082485831910116;"
+```
+*Результат*: ровно `120760` строк (состояние таблицы до того, как был залит поток).
+
+---
+
+### Шаг 5. Откат ошибочной записи (Rollback)
+Преподаватель часто просит: *"А покажи откат в реальном времени"*.
+
+1. Добавляем ошибочную порцию данных:
+```bash
+docker compose run --rm spark /opt/spark/bin/spark-sql -e "INSERT INTO lake.clean.events SELECT * FROM lake.clean.events WHERE event_time >= '2026-10-26'; SELECT count(*) FROM lake.clean.events;"
+```
+*Результат*: строк стало `143231` (появились дубликаты).
+
+2. Мгновенно откатываемся к правильному снимку:
+```bash
+docker compose run --rm spark /opt/spark/bin/spark-sql -e "CALL lake.system.rollback_to_snapshot('clean.events', 195395005001122634); SELECT count(*) FROM lake.clean.events;"
+```
+*Результат*: строк снова ровно `139530`! Данные не удалялись физически — каталог просто переставил указатель текущего снимка.
+
+---
+
+### Шаг 6. Уплотнение файлов (Compaction)
+Показать, как Iceberg борется с проблемой мелких файлов:
+```bash
+docker compose run --rm spark /opt/spark/bin/spark-sql -e "CALL lake.system.rewrite_data_files(table => 'clean.events');"
+```
+*Результат*: мелкие файлы объединяются в крупные, не блокируя читателей.
+
+---
+
+### Шаг 7. Эволюция схемы (Schema Evolution) без перезаписи файлов
+Преподаватель: *"Как вы добавили поле `actor_avatar_url`? Перезаписывали таблицу?"*
+Ответ: *"Нет, добавили через метаданные! Все файлы остались прежними, а старые строки отдают NULL."*
+
+Показать список файлов и значения новой колонки:
+```bash
+docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT actor_avatar_url, count(*) FROM lake.clean.events GROUP BY 1;"
+```
+*Результат*: `NULL  139530`. Все старые строки получили NULL без единого байта перезаписи на диске!
+
+---
+
 # Стенд курса «Технологии обработки больших данных»
 
 Файлы запуска сервисов стенда: объектное хранилище, каталог таблиц Iceberg,

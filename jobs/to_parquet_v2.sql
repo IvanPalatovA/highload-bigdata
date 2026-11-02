@@ -38,3 +38,4 @@ TO '/data/duckdb/parquet/events'
     PARTITION_BY (event_date),
     OVERWRITE_OR_IGNORE true
 );
+
