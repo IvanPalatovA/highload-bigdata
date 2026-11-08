@@ -86,7 +86,7 @@ def write_batch_to_s3(records, s3_client):
         temp_parquet = f"/tmp/topic_{dt_str}_{hour_str}_{os.getpid()}.parquet"
         with open(temp_json, "w", encoding="utf-8") as f:
             for item in batch:
-                f.write(json.dumps(item) + "\n")
+                f.write(json.dumps(item, default=str) + "\n")
         con.execute(f"COPY (SELECT * FROM read_json_auto('{temp_json}')) TO '{temp_parquet}' (FORMAT parquet, COMPRESSION zstd);")
         s3_key = f"raw/topic/dt={dt_str}/hour={hour_str}/part-0.parquet"
         s3_client.upload_file(temp_parquet, S3_BUCKET, s3_key)
