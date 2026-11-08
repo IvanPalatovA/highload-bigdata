@@ -90,8 +90,9 @@ if [ ! -f "jobs/clean.sql" ]; then
 fi
 
 grep -q "event_date" jobs/clean.sql || (echo "event_date не найден в clean.sql" && exit 1)
-grep -q "read_json_auto" jobs/clean.sql || (echo "read_json_auto не найден в clean.sql" && exit 1)
-echo -e "${GREEN}  ✔ Скрипт clean.sql читает сырые данные за сутки D и D+1 и производит дедупликацию!${NC}"
+grep -q "PARTITION_BY" jobs/clean.sql || (echo "PARTITION_BY не найден в clean.sql" && exit 1)
+grep -q "OVERWRITE_OR_IGNORE" jobs/clean.sql || (echo "OVERWRITE_OR_IGNORE не найден в clean.sql" && exit 1)
+echo -e "${GREEN}  ✔ Скрипт clean.sql выполняет запись в s3://lake/clean/events с PARTITION_BY (event_date) и OVERWRITE_OR_IGNORE!${NC}"
 
 # -----------------------------------------------------------------------------
 # ЭТАП 4: Проверка партиционирования и отсечения файлов (Partition Pruning) в DuckDB
