@@ -75,14 +75,14 @@ fi
 # ЭТАП 3: Проверка структуры сырого слоя (stream)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 3/7] Проверка структуры каталогов и сжатия файлов потока (stream)...${NC}"
-STREAM_FILES=$(find data/raw/stream -name "*.jsonl.gz" 2>/dev/null | head -n 5)
+STREAM_FILES=$(find data/raw/stream -name "*.jsonl.gz" 2>/dev/null || true)
 if [ -z "${STREAM_FILES}" ]; then
   echo -e "${RED}Ошибка: В data/raw/stream/dt=*/hour=*/ нет файлов .jsonl.gz!${NC}"
   exit 1
 fi
-STREAM_COUNT=$(find data/raw/stream -name "*.jsonl.gz" 2>/dev/null | wc -l)
+STREAM_COUNT=$(echo "${STREAM_FILES}" | wc -l)
 echo -e "${GREEN}  ✔ Файлы потока присутствуют (${STREAM_COUNT} часовых файлов .jsonl.gz)!${NC}"
-echo "    Пример пути: $(echo "${STREAM_FILES}" | head -n 1)"
+echo "    Пример пути: $(echo "${STREAM_FILES}" | head -n 1 || true)"
 
 # -----------------------------------------------------------------------------
 # ЭТАП 4: Проверка исторического среза (backfill за 7 суток)
@@ -99,9 +99,9 @@ echo -e "${GREEN}  ✔ Исторический срез в data/raw/history с�
 # ЭТАП 5: Проверка соответствия фильтру и структуре событий
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 5/7] Проверка обязательных полей event_key, event_time и фильтра...${NC}"
-SAMPLE_FILE=$(find data/raw/stream data/raw/history -name "*.jsonl.gz" | head -n 1)
+SAMPLE_FILE=$(find data/raw/stream data/raw/history -name "*.jsonl.gz" 2>/dev/null | head -n 1 || true)
 echo "  Анализ файла: ${SAMPLE_FILE}"
-SAMPLE_EVENT=$(zcat "${SAMPLE_FILE}" | head -n 1)
+SAMPLE_EVENT=$(zcat "${SAMPLE_FILE}" 2>/dev/null | head -n 1 || true)
 
 KEY_VAL=$(echo "${SAMPLE_EVENT}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('event_key', ''))")
 TIME_VAL=$(echo "${SAMPLE_EVENT}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('event_time', ''))")
@@ -122,7 +122,7 @@ echo -e "${GREEN}  ✔ Поля валидны: event_key='${KEY_VAL}', event_ti
 # ЭТАП 6: Проверка отсутствия дубликатов ключей (дедупликация и перезапуск)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 6/7] Проверка дедупликации (повторов по event_key за сутки нет)...${NC}"
-SAMPLE_DAY_DIR=$(find data/raw/stream -type d -name "dt=*" | head -n 1)
+SAMPLE_DAY_DIR=$(find data/raw/stream -type d -name "dt=*" 2>/dev/null | head -n 1 || true)
 if [ -n "${SAMPLE_DAY_DIR}" ]; then
   DUP_COUNT=$(zcat "${SAMPLE_DAY_DIR}"/hour=*/*.jsonl.gz 2>/dev/null | python3 -c "
 import sys, json
