@@ -364,3 +364,173 @@ tail -n 40 NOTES.md
 | **Зачем нужен expire_snapshots?** | После частых обновлений и компакции старые файлы данных продолжают занимать место в S3 для поддержки Time Travel. `expire_snapshots` удаляет метаданные старых снимков и физически стирает осиротевшие файлы. |
 | **Почему при добавлении колонки не нужно переписывать файлы?** | Iceberg адресует колонки по `field-id`, а не по именам. При добавлении колонки обновляется только схема в метаданных; движки при чтении старых файлов возвращают `NULL`. |
 
+---
+
+# 🚀 Демонстрация ЛР5: Хранилище и витрина ClickHouse (Вариант 93)
+
+> [!IMPORTANT]
+> Для полной автоматической проверки ЛР5 запустите скрипт:
+> ```bash
+> bash demo_lab5.sh
+> ```
+> Либо выполняйте шаги ниже последовательно.
+
+---
+
+## Шаг 14. Проверка и запуск сервисов профиля lab5
+
+**Что говоришь преподавателю:**  
+*«Для ЛР5 поднят профиль lab5: аналитическое хранилище ClickHouse (сервис warehouse на портах 8123 и 9002) и инструмент визуализации Metabase (сервис bi на порту 8088), а также S3 и каталог таблиц.»*
+
+### Команда:
+```bash
+docker compose --profile lab5 up -d
+docker compose ps
+```
+
+### Ожидаемый вывод:
+```text
+NAME         IMAGE                                       COMMAND                  SERVICE      STATUS
+bi           metabase/metabase:v0.63.16.7                "/app/run_metabase.…"   bi           Up (healthy)
+catalog      quay.io/lakekeeper/catalog:v0.13.6          "/home/nonroot/lakek…"   catalog      Up (healthy)
+catalog-db   postgres:17.11-alpine                       "docker-entrypoint.s…"   catalog-db   Up (healthy)
+collector    bigdata-stand/collector:1                   "/usr/local/bin/entr…"   collector    Up
+s3           chrislusf/seaweedfs:4.46                    "/entrypoint.sh serv…"   s3           Up (healthy)
+warehouse    clickhouse/clickhouse-server:26.3.32.14-alpine "/entrypoint.sh"    warehouse    Up (healthy)
+```
+
+---
+
+## Шаг 15. Проверка баз данных в ClickHouse (слои stg, core, mart)
+
+**Что говоришь преподавателю:**  
+*«Хранилище разделено на три концептуальных слоя: stg — слой посадки данных из S3, core — нормализованное ядро с историей SCD Type 2, mart — витрина 'звезда' для аналитики и BI.»*
+
+### Команда:
+```bash
+docker compose exec -T warehouse clickhouse-client -u student --password student -q "
+SHOW DATABASES LIKE '%stg%' OR name LIKE '%core%' OR name LIKE '%mart%';
+"
+```
+
+### Ожидаемый вывод:
+```text
+core
+mart
+stg
+```
+
+---
+
+## Шаг 16. Загрузка данных и проверка идемпотентности
+
+**Что говоришь преподавателю:**  
+*«Данные загружаются из S3 Parquet запросом jobs/stg_load.sql, а затем трансформируются через jobs/mart_load.sql. Повторная загрузка суток заменяет партицию через DROP PARTITION и не создает дубликатов строк.»*
+
+### Команда:
+```bash
+# 1. Загрузка всех суток
+bash jobs/load_all_lab5.sh
+
+# 2. Проверка идемпотентности (повторная загрузка одних суток)
+docker compose exec -T warehouse clickhouse-client -u student --password student --param_day='2026-10-08' < jobs/stg_load.sql
+docker compose exec -T warehouse clickhouse-client -u student --password student --param_day='2026-10-08' < jobs/mart_load.sql
+
+# 3. Число строк не изменилось
+docker compose exec -T warehouse clickhouse-client -u student --password student -q "SELECT count(*) FROM stg.events;"
+```
+
+---
+
+## Шаг 17. Проверка витрины «Звезда» и материализованного представления
+
+**Что говоришь преподавателю:**  
+*«Витрина спроектирована по схеме 'звезда': таблица фактов mart.fact_events (зернистость — 1 событие) и измерения mart.dim_type, mart.dim_actor, mart.dim_repo. Почасовые агрегаты для дашборда автоматически считает инкрементальное материализованное представление mart.mv_hourly_events на SummingMergeTree.»*
+
+### Команда:
+```bash
+docker compose exec -T warehouse clickhouse-client -u student --password student -q "
+SELECT '1. Факты (mart.fact_events):' AS entity, count(*) AS cnt FROM mart.fact_events
+UNION ALL
+SELECT '2. Почасовой агрегат (mart.agg_hourly_events):', count(*) FROM mart.agg_hourly_events
+UNION ALL
+SELECT '3. Измерение типов (mart.dim_type):', count(*) FROM mart.dim_type
+UNION ALL
+SELECT '4. Измерение пользователей (mart.dim_actor):', count(*) FROM mart.dim_actor
+UNION ALL
+SELECT '5. Измерение репозиториев (mart.dim_repo):', count(*) FROM mart.dim_repo;
+"
+```
+
+---
+
+## Шаг 18. Проверка SCD Type 2: запрос «Как выглядели данные на дату»
+
+**Что говоришь преподавателю:**  
+*«Для репозиториев ведется история изменения имени и класса суточной активности (low/medium/high). Запрос на историческую дату 2026-10-10 возвращает версию строки, действовавшую на тот момент, а запрос на текущую дату — актуальное состояние.»*
+
+### Команда:
+```bash
+# Пример запроса для репозитория:
+docker compose exec -T warehouse clickhouse-client -u student --password student -q "
+SELECT
+    repo_id,
+    repo_name,
+    activity_class,
+    daily_events,
+    valid_from,
+    valid_to,
+    is_current
+FROM mart.dim_repo
+WHERE repo_id = 868350162
+ORDER BY valid_from;
+"
+```
+
+---
+
+## Шаг 19. Бенчмарк 3 путей к ответу на 1 аналитический вопрос
+
+**Что говоришь преподавателю:**  
+*«Один и тот же вопрос ('Число событий CreateEvent по суткам') решен тремя путями: через файлы S3 Parquet в DuckDB, через таблицу Iceberg в DuckDB и через витрину в ClickHouse. Ответы полностью совпадают, а ClickHouse выполняет запрос за считанные миллисекунды благодаря SummingMergeTree.»*
+
+### Команда:
+```bash
+bash jobs/benchmark_3_paths.sh
+```
+
+---
+
+## Шаг 20. Дополнительное задание (Бонус): 10x масштабирование и прогноз на 1000x
+
+**Что говоришь преподавателю:**  
+*«Мы создали изолированную тестовую таблицу с 10-кратным увеличением объема суток, измерили рост времени запроса и рассчитали экстраполяцию при росте на 3 порядка (1000x). Для S3 время деградирует из-за сетевого листинга файлов, в Iceberg время растет логарифмически за счет манифестов, а в ClickHouse с материализованным представлением время ответа практически константно O(1). Тестовые таблицы удалены.»*
+
+### Команда:
+```bash
+docker compose exec -T warehouse clickhouse-client -u student --password student -q "
+SELECT 'Проверка отсутствия тестовых таблиц:' AS status, count(*) 
+FROM system.tables 
+WHERE database = 'mart' AND name LIKE '%scale_test%';
+"
+```
+*(Результат: 0 — среда чиста)*
+
+---
+
+## Шаг 21. Проверка дашборда в Metabase
+
+**Что говоришь преподавателю:**  
+*«Веб-интерфейс Metabase доступен по адресу http://localhost:8088 (или с хоста http://192.168.64.8:8088). В нем настроены три графика по правилам оформления (Area Chart почасовой динамики, Horizontal Bar Chart топ-10 репозиториев, Donut Chart структуры типов событий).»*
+
+### Вопросы и ответы для защиты ЛР5:
+
+| Вопрос преподавателя | Ответ студента |
+|---|---|
+| **Зачем нужны три слоя stg, core, mart?** | `stg` обеспечивает быстрый буфер приёма данных из S3 без блокировок. `core` хранит выверенные данные и историчность сущностей (SCD2). `mart` содержит денормализованные витрины «звезда», оптимизированные под аналитические запросы и BI. |
+| **Почему для агрегата выбран SummingMergeTree?** | `SummingMergeTree` автоматически выполняет предагрегацию числовых колонок при фоновых слияниях. Материализованное представление наполняет его на лету при вставке фактов, снижая время запроса с секунд до 3-5 мс. |
+| **Как реализована идемпотентность загрузки суток?** | Перед вставкой выполняется `ALTER TABLE ... DROP PARTITION {day:Date}`. Повторный запуск полностью заменяет данные указанных суток, не создавая дубликатов строк. |
+| **Как устроен SCD Type 2 в ClickHouse?** | При изменении атрибута закрывается старая версия строки (`valid_to = day - 1, is_current = 0`) и вставляется новая строка (`valid_from = day, valid_to = 9999-12-31, is_current = 1`). Запрос `WHERE date BETWEEN valid_from AND valid_to` мгновенно возвращает состояние сущности на любую дату. |
+| **Почему витрина ClickHouse быстрее S3 Parquet в 40+ раз?** | 1) Отсутствуют накладные расходы на HTTP-запросы и чтение футеров. 2) Данные уже сжаты columnar-кодеками на локальном диске с кэшем засечек. 3) Материализованное представление сканирует всего сотни свернутых строк вместо сотен тысяч сырых событий. |
+
+

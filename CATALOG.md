@@ -86,3 +86,94 @@ flowchart TD
 - **Lakekeeper REST Catalog**: сервис каталога Iceberg на порту 8181, хранящий указатели на текущие версии метаданных таблиц в базе Postgres (`catalog-db`). Отвечает движкам на запросы о текущих снимках, схеме и расположении манифестов.
 - **DuckDB**: используется для быстрой локальной аналитики и загрузки данных. Подключается к каталогу через расширение `iceberg` и `ATTACH 'lake' AS lake (TYPE iceberg)`.
 - **Spark**: пакетный движок с расширениями `IcebergSparkSessionExtensions`. Выполняет операции DDL, обслуживание таблицы (уплотнение файлов через `rewrite_data_files`, очистку снимков через `expire_snapshots`, откат через `rollback_to_snapshot`).
+
+## stg.events (ЛР5)
+- Архитектура и слой: аналитическое хранилище ClickHouse, слой приёма (Staging)
+- Где лежит: база `stg`, таблица `events` в ClickHouse (`warehouse:9000`)
+- Формат: MergeTree, локальные сжатые столбцы ClickHouse
+- Партиционирование и сортировка: `PARTITION BY event_date`, `ORDER BY (type, repo_id, event_time, id)`
+- Источник: Parquet-файлы слоя очищенных данных `s3://lake/clean/events/`, задание `jobs/stg_load.sql` через функцию `s3()`
+- Потребители: слой нормализованного ядра `core.events` (ЛР5)
+- Свежесть: пакетная суточная загрузка с атомарной заменой партиции (`ALTER TABLE stg.events DROP PARTITION IF EXISTS {day:Date}`)
+
+## core.events (ЛР5)
+- Архитектура и слой: аналитическое хранилище ClickHouse, нормализованное ядро (Core)
+- Где лежит: база `core`, таблица `events`
+- Формат: MergeTree
+- Партиционирование и сортировка: `PARTITION BY event_date`, `ORDER BY (type, repo_id, event_time, id)`
+- Источник: `stg.events`, задание `jobs/mart_load.sql`
+- Потребители: таблица фактов витрины `mart.fact_events`, измерение `mart.dim_actor`, расчёт SCD2 `core.dim_repo_scd`
+- Свежесть: обновляется согласованно со слоем `stg`
+
+## core.dim_repo_scd (ЛР5)
+- Архитектура и слой: аналитическое хранилище ClickHouse, историческое измерение с версионированием SCD Type 2
+- Где лежит: база `core`, таблица `dim_repo_scd`
+- Формат: ReplacingMergeTree
+- Партиционирование и сортировка: `ORDER BY (repo_id, valid_from)`
+- Поля: `repo_id`, `repo_name`, `activity_class` (low/medium/high), `daily_events`, `valid_from`, `valid_to`, `is_current`
+- Источник: агрегация транзакций ядра `core.events` по суткам
+- Потребители: аналитическая витрина `mart.dim_repo`, запросы «как выглядели данные на дату»
+- Свежесть: суточный срез; при изменении класса активности или названия создаётся новая версия записи с `valid_from = day`, прошлая закрывается `valid_to = day - 1`
+
+## mart.fact_events (ЛР5)
+- Архитектура и слой: аналитическое хранилище ClickHouse, витрина «Звезда» (таблица фактов)
+- Где лежит: база `mart`, таблица `fact_events`
+- Формат: MergeTree
+- Партиционирование и сортировка: `PARTITION BY event_date`, `ORDER BY (type_key, repo_id, event_time, event_id)`
+- Зернистость: одно событие GitHub
+- Ключи измерений: `event_date`, `type_key`, `repo_id`, `actor_id`
+- Метрика: `events_count = 1`
+- Источник: `core.events`, задание `jobs/mart_load.sql`
+- Потребители: материализованное представление `mart.mv_hourly_events`, отчёты Metabase, аналитические SQL-запросы
+
+## mart.dim_type / mart.dim_actor / mart.dim_repo (ЛР5)
+- Архитектура и слой: аналитическое хранилище ClickHouse, таблицы измерений витрины «Звезда»
+- Где лежат: база `mart` (`dim_type`, `dim_actor`, `dim_repo`)
+- Формат: MergeTree / ReplacingMergeTree
+- Назначение: хранение справочников типов событий, уникальных акторов и репозиториев с историей изменения статусов (SCD2)
+- Источник: справочные данные и проекции из `core`
+
+## mart.agg_hourly_events и mart.mv_hourly_events (ЛР5)
+- Архитектура и слой: аналитическое хранилище ClickHouse, предрассчитанный агрегат витрины
+- Где лежит: база `mart`, таблица `agg_hourly_events` + материализованное представление `mv_hourly_events`
+- Формат: SummingMergeTree(events_count), `PARTITION BY event_date`, `ORDER BY (hour, type_key)`
+- Назначение: мгновенная отдача почасовой аналитики для интерактивных дашбордов Metabase без сканирования сырых фактов
+- Источник: наполняется автоматически при вставке в `mart.fact_events` через триггер материализованного представления
+
+## Связи сервисов (ЛР5)
+
+```mermaid
+flowchart TD
+    subgraph Lake ["Озеро данных и каталоги"]
+        S3["S3 (SeaweedFS / Garage) :9000<br/>s3://lake/clean/events/"]
+        Catalog["Lakekeeper REST Catalog :8181"]
+    end
+
+    subgraph DWH ["Аналитическое хранилище (ClickHouse :8123 / :9000)"]
+        STG[("stg.events<br/>(Слой приёма)")]
+        CORE[("core.events / core.dim_repo_scd<br/>(Нормализованное ядро + SCD2)")]
+        MART[("mart.fact_events + mart.dim_*<br/>(Витрина 'Звезда')")]
+        MV[("mart.agg_hourly_events<br/>(SummingMergeTree MV)")]
+        
+        STG -->|jobs/mart_load.sql| CORE
+        CORE -->|jobs/mart_load.sql| MART
+        MART -->|Инкрементальный триггер| MV
+    end
+
+    subgraph BI ["Визуализация и аналитика"]
+        Metabase["Metabase BI :8088<br/>(Дашборды и графики)"]
+        DuckDB["DuckDB CLI<br/>(Бенчмарк путей)"]
+    end
+
+    S3 -->|s3() функция в jobs/stg_load.sql| STG
+    S3 -->|read_parquet()| DuckDB
+    Catalog -->|Iceberg REST| DuckDB
+    MV -->|HTTP 8123 (SQL)| Metabase
+    MART -->|HTTP 8123 (SQL)| Metabase
+    MART -->|SQL| DuckDB
+```
+
+- **S3 $\to$ ClickHouse (`stg.events`)**: ClickHouse обращается к S3 по протоколу HTTP на порт 9000 с авторизацией через функцию `s3()`, считывая Parquet-файлы с автоматическим сопоставлением типов.
+- **ClickHouse $\to$ Metabase**: Сервис `bi` (Metabase) на порту 8088 подключается к сервису `warehouse` (ClickHouse) по HTTP-порту 8123 (база `mart`, логин/пароль `student`/`student`) и исполняет аналитические SQL-запросы в реальном времени.
+- **Движок DuckDB**: используется в качестве единого арбитра для сравнительного бенчмарка трёх архитектурных путей.
+
