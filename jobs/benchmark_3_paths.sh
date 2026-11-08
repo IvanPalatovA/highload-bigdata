@@ -83,3 +83,4 @@ DROP TABLE IF EXISTS mart.fact_events_scale_test;
 "
 echo -e "${GREEN}✔ Тестовые таблицы удалены, рабочие наборы сохранены в исходном виде!${NC}"
 echo -e "${GREEN}✔ Бенчмарк и бонусное задание успешно выполнены!${NC}"
+

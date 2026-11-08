@@ -55,3 +55,4 @@ SELECT 'mart.agg_hourly_events', count(*) FROM mart.agg_hourly_events
 UNION ALL
 SELECT 'core.dim_repo_scd', count(*) FROM core.dim_repo_scd;
 "
+

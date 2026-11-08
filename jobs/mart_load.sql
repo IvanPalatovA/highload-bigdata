@@ -213,3 +213,4 @@ SELECT
     1 AS events_count
 FROM core.events
 WHERE event_date = {day:Date};
+

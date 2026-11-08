@@ -65,3 +65,4 @@ FROM s3(
     'studentsecretkey',
     'Parquet'
 );
+
