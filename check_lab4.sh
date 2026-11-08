@@ -184,9 +184,8 @@ if [ -n "$SNAP_BEFORE" ]; then
   echo "  Базовый снимок до ошибки: ${SNAP_BEFORE}"
   echo "  1. Имитация ошибочной вставки дубликатов..."
   docker compose run --rm spark /opt/spark/bin/spark-sql -e "
-    INSERT INTO lake.clean.events (event_key, event_time, received_at, source, id, type, public, actor_id, actor_login, repo_id, repo_name, org_id, org_login, ref_type, ref, master_branch, description, pusher_type)
-    SELECT event_key, event_time, received_at, source, id, type, public, actor_id, actor_login, repo_id, repo_name, org_id, org_login, ref_type, ref, master_branch, description, pusher_type 
-    FROM lake.clean.events WHERE event_time >= '2026-10-26 23:00:00';
+    INSERT INTO lake.clean.events
+    SELECT * FROM lake.clean.events WHERE event_time >= '2026-10-26 23:00:00';
     SELECT count(*) AS rows_with_error FROM lake.clean.events;
   "
   echo "  2. Мгновенный откат к снимку ${SNAP_BEFORE}..."
