@@ -1,13 +1,9 @@
 -- jobs/create_table.sql
 -- ЛР4: Создание таблицы Iceberg lake.clean.events с hidden partitioning по дню.
--- Запуск: docker compose run --rm duckdb -init init.sql < jobs/create_table.sql
---
--- Требования варианта: схема события (поля Avro v1) + скрытое партиционирование days(event_time).
+-- В DuckDB каталог lake уже подключен как (TYPE iceberg), поэтому 'USING iceberg' писать не нужно.
 
--- Создаём namespace, если не существует
 CREATE SCHEMA IF NOT EXISTS lake.clean;
 
--- Создаём таблицу Iceberg
 CREATE TABLE IF NOT EXISTS lake.clean.events (
     event_key       VARCHAR,
     event_time      TIMESTAMPTZ,
@@ -27,6 +23,5 @@ CREATE TABLE IF NOT EXISTS lake.clean.events (
     master_branch   VARCHAR,
     description     VARCHAR,
     pusher_type     VARCHAR
-) USING iceberg
+)
 PARTITIONED BY (days(event_time));
-

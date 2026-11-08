@@ -93,9 +93,35 @@ echo -e "${GREEN}✔ Сервисы каталога (catalog, catalog-db) и S3
 echo -e "\n${YELLOW}>>> [Этап 2/11] Проверка существования таблицы lake.clean.events...${NC}"
 TABLE_CHECK=$(docker compose run --rm duckdb -init init.sql -c "SELECT count(*) FROM lake.clean.events;" 2>&1 || true)
 
-if echo "$TABLE_CHECK" | grep -q "Table with name events does not exist" || echo "$TABLE_CHECK" | grep -q "Catalog Error"; then
-  echo -e "${CYAN}Таблица ещё не создана. Выполняю jobs/create_table.sql...${NC}"
-  docker compose run --rm duckdb -init init.sql < jobs/create_table.sql
+if echo "$TABLE_CHECK" | grep -qE "does not exist|Catalog Error|not found"; then
+  echo -e "${CYAN}Таблица ещё не создана. Инициализирую...${NC}"
+  if ! docker compose run --rm duckdb -init init.sql < jobs/create_table.sql 2>/dev/null; then
+    echo -e "${CYAN}Создание схемы через Spark SQL с hidden partitioning days(event_time)...${NC}"
+    docker compose run --rm spark /opt/spark/bin/spark-sql -e "
+      CREATE NAMESPACE IF NOT EXISTS lake.clean;
+      CREATE TABLE IF NOT EXISTS lake.clean.events (
+        event_key STRING,
+        event_time TIMESTAMP,
+        received_at STRING,
+        source STRING,
+        id STRING,
+        type STRING,
+        public BOOLEAN,
+        actor_id BIGINT,
+        actor_login STRING,
+        repo_id BIGINT,
+        repo_name STRING,
+        org_id BIGINT,
+        org_login STRING,
+        ref_type STRING,
+        ref STRING,
+        master_branch STRING,
+        description STRING,
+        pusher_type STRING
+      ) USING iceberg
+      PARTITIONED BY (days(event_time));
+    "
+  fi
   echo -e "${CYAN}Загружаю данные через jobs/load_all_days.sh...${NC}"
   bash jobs/load_all_days.sh
   echo -e "${CYAN}Добавляю колонку схемы v2 (actor_avatar_url)...${NC}"

@@ -28,3 +28,4 @@ systemctl restart docker
 ' 2>/dev/null || true
 echo -e "${GREEN}✔ Конфигурация Docker обновлена, MTU 1360 применён.${NC}"
 echo -e "${GREEN}✔ Сеть оптимизирована, обрывы TLS и сброс пакетов VPN устранены!${NC}"
+
