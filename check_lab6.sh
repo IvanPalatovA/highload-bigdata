@@ -102,7 +102,7 @@ fi
 # ЭТАП 4: Публикация событий (produce) в тему events
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 4/8] Публикация реальных событий в тему Kafka 'events'...${NC}"
-SAMPLE_FILE=$(find data/raw/stream -name "*.jsonl.gz" 2>/dev/null | head -n 1)
+SAMPLE_FILE=$(find data/raw/stream -name "*.jsonl.gz" 2>/dev/null | head -n 1 || true)
 PROD_COUNT=$(python3 jobs/kafka_tool.py produce --topic events --file "${SAMPLE_FILE}" --max 300)
 echo -e "${GREEN}  ✔ Опубликовано 300 событий с сериализацией Confluent Avro wire format!${NC}"
 

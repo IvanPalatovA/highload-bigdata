@@ -82,14 +82,18 @@ def write_batch_to_s3(records, s3_client):
 
     written_count = 0
     for (dt_str, hour_str), batch in by_partition.items():
-        s3_path = f"s3://{S3_BUCKET}/raw/topic/dt={dt_str}/hour={hour_str}/part-0.parquet"
-        temp_file = f"/tmp/topic_{dt_str}_{hour_str}_{os.getpid()}.parquet"
-        con.register("batch_view", duckdb.from_df(duckdb.df({"data": batch})["data"]))
-        con.execute(f"COPY (SELECT * FROM batch_view) TO '{temp_file}' (FORMAT parquet, COMPRESSION zstd);")
+        temp_json = f"/tmp/topic_{dt_str}_{hour_str}_{os.getpid()}.json"
+        temp_parquet = f"/tmp/topic_{dt_str}_{hour_str}_{os.getpid()}.parquet"
+        with open(temp_json, "w", encoding="utf-8") as f:
+            for item in batch:
+                f.write(json.dumps(item) + "\n")
+        con.execute(f"COPY (SELECT * FROM read_json_auto('{temp_json}')) TO '{temp_parquet}' (FORMAT parquet, COMPRESSION zstd);")
         s3_key = f"raw/topic/dt={dt_str}/hour={hour_str}/part-0.parquet"
-        s3_client.upload_file(temp_file, S3_BUCKET, s3_key)
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
+        s3_client.upload_file(temp_parquet, S3_BUCKET, s3_key)
+        if os.path.exists(temp_json):
+            os.remove(temp_json)
+        if os.path.exists(temp_parquet):
+            os.remove(temp_parquet)
         written_count += len(batch)
     return written_count
 
