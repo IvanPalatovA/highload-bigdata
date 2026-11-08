@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
 # stand/demo.sh
 # Автоматическая демонстрация и проверка ЛР4 (Таблицы Apache Iceberg, Вариант 93)
-# Запуск: cd stand && bash demo.sh
 
-set -euo pipefail
+set -uo pipefail
 
-STAND_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "${STAND_DIR}"
+# Переход в папку stand независимо от того, как запущен скрипт (или вставлен в терминал)
+if [ -f "compose.yaml" ]; then
+  STAND_DIR="$(pwd)"
+elif [ -d "stand" ]; then
+  cd stand
+  STAND_DIR="$(pwd)"
+elif [ -d "$HOME/stand" ]; then
+  cd "$HOME/stand"
+  STAND_DIR="$(pwd)"
+else
+  STAND_DIR="$(pwd)"
+fi
 
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -48,5 +57,5 @@ echo -e "${GREEN}✔ Все существующие строки возвращ
 
 echo -e "\n${BLUE}================================================================${NC}"
 echo -e "${GREEN}✔ ВСЕ ПРОВЕРКИ ЛАБОРАТОРНОЙ РАБОТЫ №4 УСПЕШНО ПРОЙДЕНЫ!${NC}"
-echo -e "${BLUE}Подробные объяснения и ответы на вопросы см. в: stand/code.md${NC}"
+echo -e "${BLUE}Подробные объяснения и ответы на вопросы см. в: code.md${NC}"
 echo -e "${BLUE}================================================================${NC}"
