@@ -85,8 +85,8 @@ def run_clickhouse():
         res = client.query("""
         SELECT
             toDayOfWeek(event_time) as dow,
-            countIf(type_name = 'CreateEvent') as create_cnt,
-            countIf(type_name = 'DeleteEvent') as delete_cnt,
+            countIf(type_key = 'CreateEvent') as create_cnt,
+            countIf(type_key = 'DeleteEvent') as delete_cnt,
             round(create_cnt / nullIf(delete_cnt, 0), 2) as ratio
         FROM mart.fact_events
         GROUP BY 1
