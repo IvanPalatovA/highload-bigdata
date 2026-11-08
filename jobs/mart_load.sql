@@ -172,14 +172,17 @@ ORDER BY (repo_id, valid_from);
 -- Расчёт SCD2 интервалов версионирования без использования мутаций с подзапросами
 TRUNCATE TABLE IF EXISTS core.dim_repo_scd;
 
-INSERT INTO core.dim_repo_scd
+INSERT INTO core.dim_repo_scd (repo_id, repo_name, activity_class, daily_events, valid_from, valid_to, is_current)
 WITH daily_stats AS (
     SELECT
         repo_id,
         argMax(repo_name, event_time) AS repo_name,
         multiIf(count() < 5, 'low', count() <= 20, 'medium', 'high') AS activity_class,
         toUInt32(count()) AS daily_events,
-        event_date AS valid_from
+        event_date AS valid_from,
+        leadInFrame(event_date, 1, toDate('9999-12-31')) OVER (
+            PARTITION BY repo_id ORDER BY event_date ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING
+        ) AS next_date
     FROM core.events
     GROUP BY repo_id, event_date
 )
@@ -189,11 +192,8 @@ SELECT
     activity_class,
     daily_events,
     valid_from,
-    leadInFrame(subtractDays(valid_from, 0), 1, toDate('9999-12-31')) OVER (
-        PARTITION BY repo_id ORDER BY valid_from ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING
-    ) AS next_date,
     if(next_date = toDate('9999-12-31'), toDate('9999-12-31'), subtractDays(next_date, 1)) AS valid_to,
-    if(valid_to = toDate('9999-12-31'), 1, 0) AS is_current
+    if(next_date = toDate('9999-12-31'), 1, 0) AS is_current
 FROM daily_stats;
 
 TRUNCATE TABLE IF EXISTS mart.dim_repo;
