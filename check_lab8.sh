@@ -45,6 +45,9 @@ fi
 # ЭТАП 1: Запуск сервисов профиля lab8 (Kafka, Karapace, S3, Catalog, Warehouse)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 1/7] Запуск сервисов брокера, хранилища и каталога...${NC}"
+sed -i 's/^COMPOSE_FILE=.*/COMPOSE_FILE=compose.yaml:compose.s3-seaweedfs.yaml:compose.engine-duckdb.yaml:compose.bi-metabase.yaml:compose.broker-kafka.yaml/' .env 2>/dev/null || \
+sed -i '' 's/^COMPOSE_FILE=.*/COMPOSE_FILE=compose.yaml:compose.s3-seaweedfs.yaml:compose.engine-duckdb.yaml:compose.bi-metabase.yaml:compose.broker-kafka.yaml/' .env 2>/dev/null || true
+
 docker compose --profile lab6 up -d broker registry s3
 docker compose --profile lab5 up -d warehouse catalog catalog-db
 
