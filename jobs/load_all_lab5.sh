@@ -30,10 +30,21 @@ echo "=================================================================="
 for DAY in "${DAYS[@]}"; do
   echo -e "\n--------------------------------------------------"
   echo ">>> [1/2] Загрузка суток ${DAY} в stg.events из S3 Parquet..."
+  # Идемпотентность: безопасный сброс партиции перед вставкой (если она уже есть)
+  docker compose exec -T warehouse clickhouse-client -u student --password student -q \
+    "ALTER TABLE stg.events DROP PARTITION '${DAY}';" 2>/dev/null || true
+
   sed -e "s/__DAY__/${DAY}/g" -e "s/{day:Date}/'${DAY}'/g" jobs/stg_load.sql | \
     docker compose exec -T warehouse clickhouse-client -u student --password student
 
   echo ">>> [2/2] Трансформация суток ${DAY} (stg -> core -> mart)..."
+  docker compose exec -T warehouse clickhouse-client -u student --password student -q \
+    "ALTER TABLE core.events DROP PARTITION '${DAY}';" 2>/dev/null || true
+  docker compose exec -T warehouse clickhouse-client -u student --password student -q \
+    "ALTER TABLE mart.agg_hourly_events DROP PARTITION '${DAY}';" 2>/dev/null || true
+  docker compose exec -T warehouse clickhouse-client -u student --password student -q \
+    "ALTER TABLE mart.fact_events DROP PARTITION '${DAY}';" 2>/dev/null || true
+
   sed -e "s/__DAY__/${DAY}/g" -e "s/{day:Date}/'${DAY}'/g" jobs/mart_load.sql | \
     docker compose exec -T warehouse clickhouse-client -u student --password student
   echo "✔ Сутки ${DAY} успешно загружены во все слои!"

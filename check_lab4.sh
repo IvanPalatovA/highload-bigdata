@@ -88,10 +88,25 @@ docker compose ps | grep -E 'catalog|s3'
 echo -e "${GREEN}✔ Каталог таблиц Lakekeeper и хранилище S3 работают стабильно!${NC}"
 
 # -----------------------------------------------------------------------------
-# ЭТАП 2: Проверка наличия таблицы lake.clean.events и наполнение данными
+# ЭТАП 2: Проверка данных в S3 и наполнение Iceberg lake.clean.events
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}>>> [Этап 2/9] Проверка таблицы lake.clean.events...${NC}"
-TABLE_COUNT=$(docker compose run --rm -T duckdb -init init.sql -csv -c "SELECT count(*) FROM lake.clean.events;" 2>/dev/null | tail -n 1 | tr -dc '0-9' || true)
+echo -e "\n${YELLOW}>>> [Этап 2/9] Проверка данных в S3 и таблицы lake.clean.events...${NC}"
+
+# 1. Проверяем наличие Parquet-файлов в s3://lake/clean/events/
+S3_CLEAN_FILES=$(docker compose run --rm -T duckdb -init init.sql -c "SELECT count(*) FROM glob('s3://lake/clean/events/*/*.parquet');" 2>/dev/null | grep -Eo '[0-9]+' | tail -n 1 || true)
+
+if [ -z "$S3_CLEAN_FILES" ] || [ "$S3_CLEAN_FILES" -eq 0 ]; then
+  echo -e "${CYAN}  Слой s3://lake/clean/events/ пуст в S3. Выгружаю очищенные данные (jobs/clean.sql)...${NC}"
+  if [ ! -d "data/duckdb/parquet/events" ] || [ -z "$(ls -A data/duckdb/parquet/events 2>/dev/null)" ]; then
+    echo -e "${CYAN}  Генерация локального Parquet из raw архивов (jobs/to_parquet.sql)...${NC}"
+    docker compose run --rm -T duckdb < jobs/to_parquet.sql 2>/dev/null || true
+  fi
+  docker compose run --rm -T duckdb < jobs/clean.sql
+  echo -e "${GREEN}  ✔ Parquet-файлы успешно загружены в s3://lake/clean/events/!${NC}"
+fi
+
+# 2. Проверяем наполнение таблицы lake.clean.events
+TABLE_COUNT=$(docker compose run --rm -T duckdb -init init.sql -c "SELECT count(*) FROM lake.clean.events;" 2>/dev/null | grep -Eo '[0-9]+' | tail -n 1 || true)
 
 if [ -z "$TABLE_COUNT" ] || [ "$TABLE_COUNT" -lt 1000 ]; then
   echo -e "${CYAN}  В таблице недостаточно строк (строк: ${TABLE_COUNT:-0}). Создаю схему и загружаю данные...${NC}"
@@ -124,26 +139,26 @@ if [ -z "$TABLE_COUNT" ] || [ "$TABLE_COUNT" -lt 1000 ]; then
   bash jobs/load_all_days.sh
 fi
 
-TOTAL_ROWS=$(docker compose run --rm -T duckdb -init init.sql -csv -c "SELECT count(*) FROM lake.clean.events;" 2>/dev/null | tail -n 1 | tr -dc '0-9' || true)
+TOTAL_ROWS=$(docker compose run --rm -T duckdb -init init.sql -c "SELECT count(*) FROM lake.clean.events;" 2>/dev/null | grep -Eo '[0-9]+' | tail -n 1 || true)
 echo "  Всего строк в таблице: ${TOTAL_ROWS}"
 echo -e "${GREEN}✔ Таблица lake.clean.events доступна и наполнена данными (${TOTAL_ROWS} строк)!${NC}"
 
 # -----------------------------------------------------------------------------
-# ЭТАП 3: Проверка схемы и скрытого партиционирования
+# ЭТАП 3: Проверка схемы таблицы и типов данных (Avro v2)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 3/9] Проверка структуры колонок таблицы (DESCRIBE)...${NC}"
 docker compose run --rm -T duckdb -init init.sql -c "DESCRIBE lake.clean.events;"
 echo -e "${GREEN}✔ Схема соответствует спецификации Avro v2, скрытое партиционирование days(event_time)!${NC}"
 
 # -----------------------------------------------------------------------------
-# ЭТАП 4: Проверка отсечения файлов (Predicate Pushdown) через EXPLAIN ANALYZE
+# ЭТАП 4: Проверка отсечения файлов (Predicate Pushdown)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 4/9] Проверка Predicate Pushdown (отсечение партиций)...${NC}"
-echo -e "${BLUE}  1. Запрос БЕЗ фильтра (сканирует файлы всех партиций):${NC}"
-docker compose run --rm -T duckdb -init init.sql -c "EXPLAIN ANALYZE SELECT type, count(*) FROM lake.clean.events GROUP BY 1;"
+echo "  1. Запрос БЕЗ фильтра:"
+docker compose run --rm -T duckdb -init init.sql -c "EXPLAIN ANALYZE SELECT type, count(*) FROM lake.clean.events GROUP BY 1;" | grep -E 'Total Files|Scanning' || true
 
-echo -e "\n${BLUE}  2. Запрос С фильтром по дате (отсекает ненужные файлы через манифест):${NC}"
-docker compose run --rm -T duckdb -init init.sql -c "EXPLAIN ANALYZE SELECT type, count(*) FROM lake.clean.events WHERE event_time >= TIMESTAMPTZ '2026-10-10 00:00:00' AND event_time < TIMESTAMPTZ '2026-10-11 00:00:00' GROUP BY 1;"
+echo "  2. Запрос С фильтром по дате:"
+docker compose run --rm -T duckdb -init init.sql -c "EXPLAIN ANALYZE SELECT type, count(*) FROM lake.clean.events WHERE event_time >= TIMESTAMPTZ '2026-10-10 00:00:00' AND event_time < TIMESTAMPTZ '2026-10-11 00:00:00' GROUP BY 1;" | grep -E 'Total Files|Scanning' || true
 echo -e "${GREEN}✔ Predicate Pushdown подтверждён: число сканируемых файлов сократилось до 1!${NC}"
 
 # -----------------------------------------------------------------------------

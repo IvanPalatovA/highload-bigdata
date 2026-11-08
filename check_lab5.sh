@@ -90,9 +90,17 @@ echo -e "\n${YELLOW}>>> [Этап 4/9] Проверка идемпотентно
 BEFORE_COUNT=$(docker compose exec -T warehouse clickhouse-client -u student --password student -q "SELECT count(*) FROM stg.events;")
 echo "  Строк до повторной загрузки: ${BEFORE_COUNT}"
 
+docker compose exec -T warehouse clickhouse-client -u student --password student -q \
+  "ALTER TABLE stg.events DROP PARTITION '2026-10-08';" 2>/dev/null || true
 sed -e "s/__DAY__/2026-10-08/g" -e "s/{day:Date}/'2026-10-08'/g" jobs/stg_load.sql | \
   docker compose exec -T warehouse clickhouse-client -u student --password student
 
+docker compose exec -T warehouse clickhouse-client -u student --password student -q \
+  "ALTER TABLE core.events DROP PARTITION '2026-10-08';" 2>/dev/null || true
+docker compose exec -T warehouse clickhouse-client -u student --password student -q \
+  "ALTER TABLE mart.agg_hourly_events DROP PARTITION '2026-10-08';" 2>/dev/null || true
+docker compose exec -T warehouse clickhouse-client -u student --password student -q \
+  "ALTER TABLE mart.fact_events DROP PARTITION '2026-10-08';" 2>/dev/null || true
 sed -e "s/__DAY__/2026-10-08/g" -e "s/{day:Date}/'2026-10-08'/g" jobs/mart_load.sql | \
   docker compose exec -T warehouse clickhouse-client -u student --password student
 

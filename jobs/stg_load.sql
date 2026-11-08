@@ -1,6 +1,6 @@
 -- jobs/stg_load.sql
 -- ЛР5: Загрузка слоя приёма stg.events из S3 (Parquet) за сутки __DAY__
--- Поддерживает как прямую подстановку через sed, так и параметры ClickHouse
+-- Поддерживает прямую подстановку через sed
 
 CREATE DATABASE IF NOT EXISTS stg;
 
@@ -30,9 +30,6 @@ CREATE TABLE IF NOT EXISTS stg.events
 ENGINE = MergeTree
 PARTITION BY event_date
 ORDER BY (type, repo_id, event_time, id);
-
--- Идемпотентность: удаляем существующую партицию перед вставкой
-ALTER TABLE stg.events DROP PARTITION IF EXISTS '__DAY__';
 
 -- Загрузка очищенных Parquet-файлов из S3 за указанные сутки
 INSERT INTO stg.events

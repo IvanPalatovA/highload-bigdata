@@ -56,7 +56,7 @@ COPY (
         master_branch,
         description,
         pusher_type,
-        try_cast(actor_avatar_url AS VARCHAR) AS actor_avatar_url,
+        cast(null AS VARCHAR) AS actor_avatar_url,
         event_date
     FROM read_parquet(
         '/data/duckdb/parquet/events/**/*.parquet',

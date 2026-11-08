@@ -33,9 +33,6 @@ ENGINE = MergeTree
 PARTITION BY event_date
 ORDER BY (type, repo_id, event_time, id);
 
--- Идемпотентная перезагрузка суток в ядро
-ALTER TABLE core.events DROP PARTITION IF EXISTS '__DAY__';
-
 INSERT INTO core.events
 SELECT * FROM stg.events
 WHERE event_date = '__DAY__';
@@ -128,10 +125,6 @@ AS SELECT
     count() AS events_count
 FROM mart.fact_events
 GROUP BY hour, event_date, type_key;
-
--- Идемпотентная перезагрузка фактов и агрегатов за указанные сутки
-ALTER TABLE mart.agg_hourly_events DROP PARTITION IF EXISTS '__DAY__';
-ALTER TABLE mart.fact_events DROP PARTITION IF EXISTS '__DAY__';
 
 INSERT INTO mart.fact_events
 SELECT
