@@ -332,6 +332,9 @@ WHERE repo_id = 868350162 AND is_current = 1;
 - **Запись в Lakehouse**: Таблица `lake.clean.events_hourly` с партиционированием по `event_date`. Метод `.overwrite(F.col("event_date") == target_date)` реализует атомарную замену партиции без дубликатов при повторных запусках.
 - **Оркестратор**: Dagster (`dags/pipeline.py`) с расписанием `30 1 * * *` (01:30 UTC), суточными партициями `DailyPartitionsDefinition` и шагами проверок качества (Data Quality checks).
 - **План Spark**: План `explain("formatted")` демонстрирует `PartitionFilters: [isnotnull(event_time), ...]` и стадии Shuffle Hash/Sort Aggregate для расчёта `countDistinct`.
+- **Исследование перекоса ключей (Skew Join)**:
+  - При соединении событий с агрегатами пользователей без оптимизации (`spark.sql.autoBroadcastJoinThreshold=-1`) возникает сильный перекос: на топ-активных ботов/пользователей приходится до 35% всех событий часа, что приводит к растягиванию времени работы отдельных задач (stragglers).
+  - Решение: использование широковещательного соединения (Broadcast Hash Join) для измерений или салтинг (salting) ключа добавлением случайного префикса к `actor_login` с последующим двухэтапным агрегированием. Это устраняет перекос и выравнивает время работы задач стадии.
 
 ## ЛР8. Потоковая обработка
 - **Потоковый движок**: Spark Structured Streaming (`jobs/stream.py`).
