@@ -58,9 +58,9 @@ def main():
         from_avro("avro_payload", avro_schema_json).alias("data")
     ).select("data.*")
 
-    # Преобразование event_time в Timestamp (делим миллисекунды на 1000)
+    # event_time из Avro logicalType timestamp-millis уже разобран Spark как TimestampType
     events_df = parsed_df.select(
-        (F.col("event_time") / 1000.0).cast("timestamp").alias("event_time"),
+        F.col("event_time").cast("timestamp").alias("event_time"),
         F.col("type"),
         F.col("actor_login")
     )
