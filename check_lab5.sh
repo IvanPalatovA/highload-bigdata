@@ -57,6 +57,10 @@ fi
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 1/9] Запуск и проверка сервисов профиля lab5...${NC}"
 docker compose --profile lab5 up -d
+echo "  Ожидание готовности ClickHouse..."
+until docker compose exec -T warehouse clickhouse-client -u student --password student -q "SELECT 1;" >/dev/null 2>&1; do
+  sleep 1
+done
 docker compose ps | grep -E 'warehouse|bi|s3'
 echo -e "${GREEN}✔ Аналитическое хранилище ClickHouse и сервис BI Metabase запущены!${NC}"
 
@@ -68,7 +72,7 @@ docker compose exec -T warehouse clickhouse-client -u student --password student
 CREATE DATABASE IF NOT EXISTS stg;
 CREATE DATABASE IF NOT EXISTS core;
 CREATE DATABASE IF NOT EXISTS mart;
-SHOW DATABASES LIKE '%stg%' OR name LIKE '%core%' OR name LIKE '%mart%';
+SELECT name FROM system.databases WHERE name IN ('stg', 'core', 'mart') ORDER BY name;
 "
 echo -e "${GREEN}✔ Слои stg (приём), core (ядро) и mart (витрина) активны!${NC}"
 
@@ -86,8 +90,11 @@ echo -e "\n${YELLOW}>>> [Этап 4/9] Проверка идемпотентно
 BEFORE_COUNT=$(docker compose exec -T warehouse clickhouse-client -u student --password student -q "SELECT count(*) FROM stg.events;")
 echo "  Строк до повторной загрузки: ${BEFORE_COUNT}"
 
-docker compose exec -T warehouse clickhouse-client -u student --password student --param_day='2026-10-08' < jobs/stg_load.sql
-docker compose exec -T warehouse clickhouse-client -u student --password student --param_day='2026-10-08' < jobs/mart_load.sql
+sed -e "s/__DAY__/2026-10-08/g" -e "s/{day:Date}/'2026-10-08'/g" jobs/stg_load.sql | \
+  docker compose exec -T warehouse clickhouse-client -u student --password student
+
+sed -e "s/__DAY__/2026-10-08/g" -e "s/{day:Date}/'2026-10-08'/g" jobs/mart_load.sql | \
+  docker compose exec -T warehouse clickhouse-client -u student --password student
 
 AFTER_COUNT=$(docker compose exec -T warehouse clickhouse-client -u student --password student -q "SELECT count(*) FROM stg.events;")
 echo "  Строк после повторной загрузки: ${AFTER_COUNT}"
@@ -179,4 +186,3 @@ fi
 echo -e "\n${BLUE}========================================================================${NC}"
 echo -e "${GREEN}✔ ВСЕ ТРЕБОВАНИЯ ЛАБОРАТОРНОЙ РАБОТЫ №5 И БОНУСА УСПЕШНО ВЫПОЛНЕНЫ!     ${NC}"
 echo -e "${BLUE}========================================================================${NC}"
-

@@ -30,12 +30,12 @@ echo "=================================================================="
 for DAY in "${DAYS[@]}"; do
   echo -e "\n--------------------------------------------------"
   echo ">>> [1/2] Загрузка суток ${DAY} в stg.events из S3 Parquet..."
-  docker compose exec -T warehouse clickhouse-client -u student --password student \
-    --param_day="${DAY}" < jobs/stg_load.sql
+  sed -e "s/__DAY__/${DAY}/g" -e "s/{day:Date}/'${DAY}'/g" jobs/stg_load.sql | \
+    docker compose exec -T warehouse clickhouse-client -u student --password student
 
   echo ">>> [2/2] Трансформация суток ${DAY} (stg -> core -> mart)..."
-  docker compose exec -T warehouse clickhouse-client -u student --password student \
-    --param_day="${DAY}" < jobs/mart_load.sql
+  sed -e "s/__DAY__/${DAY}/g" -e "s/{day:Date}/'${DAY}'/g" jobs/mart_load.sql | \
+    docker compose exec -T warehouse clickhouse-client -u student --password student
   echo "✔ Сутки ${DAY} успешно загружены во все слои!"
 done
 
@@ -55,4 +55,3 @@ SELECT 'mart.agg_hourly_events', count(*) FROM mart.agg_hourly_events
 UNION ALL
 SELECT 'core.dim_repo_scd', count(*) FROM core.dim_repo_scd;
 "
-

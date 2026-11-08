@@ -1,8 +1,6 @@
 -- jobs/stg_load.sql
--- ЛР5: Загрузка слоя приёма stg.events из S3 (Parquet) за сутки {day:Date}
--- Запуск:
---   docker compose exec -T warehouse clickhouse-client -u student --password student \
---     --param_day=YYYY-MM-DD < jobs/stg_load.sql
+-- ЛР5: Загрузка слоя приёма stg.events из S3 (Parquet) за сутки __DAY__
+-- Поддерживает как прямую подстановку через sed, так и параметры ClickHouse
 
 CREATE DATABASE IF NOT EXISTS stg;
 
@@ -34,13 +32,13 @@ PARTITION BY event_date
 ORDER BY (type, repo_id, event_time, id);
 
 -- Идемпотентность: удаляем существующую партицию перед вставкой
-ALTER TABLE stg.events DROP PARTITION IF EXISTS {day:Date};
+ALTER TABLE stg.events DROP PARTITION IF EXISTS '__DAY__';
 
 -- Загрузка очищенных Parquet-файлов из S3 за указанные сутки
 INSERT INTO stg.events
 SELECT
     event_key,
-    toDateTime64(event_time, 3, 'UTC') AS event_time,
+    event_time,
     received_at,
     source,
     id,
@@ -57,12 +55,11 @@ SELECT
     master_branch,
     description,
     pusher_type,
-    ifNull(actor_avatar_url, NULL) AS actor_avatar_url,
-    toDate({day:Date}) AS event_date
+    cast(null, 'Nullable(String)') AS actor_avatar_url,
+    toDate('__DAY__') AS event_date
 FROM s3(
-    'http://s3:9000/lake/clean/events/event_date=' || toString({day:Date}) || '/*.parquet',
+    'http://s3:9000/lake/clean/events/event_date=__DAY__/*.parquet',
     'studentaccess',
     'studentsecretkey',
     'Parquet'
 );
-

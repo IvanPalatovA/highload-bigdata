@@ -20,11 +20,11 @@ echo -e "${BLUE}================================================================
 
 # 1. Замеры Путь 1: DuckDB над Parquet в S3
 echo -e "\n${YELLOW}>>> [Путь 1] DuckDB over S3 Parquet (read_parquet)...${NC}"
-P1_SQL="SELECT event_date, count(*) AS cnt FROM read_parquet('s3://lake/clean/events/**/*.parquet', hive_partitioning = true) WHERE type = 'CreateEvent' GROUP BY event_date ORDER BY event_date;"
+P1_SQL="SELECT event_date, count(*) AS cnt FROM read_parquet('s3://lake/clean/events/*/*.parquet', hive_partitioning = true) WHERE type = 'CreateEvent' GROUP BY event_date ORDER BY event_date;"
 
 for i in 1 2 3; do
   echo -n "  Запуск $i: "
-  docker compose run --rm duckdb -init init.sql -c ".timer on" -c "${P1_SQL}" 2>&1 | grep "Run Time" || true
+  (echo ".timer on"; echo "${P1_SQL}") | docker compose run --rm -T duckdb -init init.sql 2>&1 | grep -i "Run Time" || true
 done
 
 # 2. Замеры Путь 2: DuckDB над Iceberg
@@ -33,7 +33,7 @@ P2_SQL="SELECT CAST(event_time AS DATE) AS event_date, count(*) AS cnt FROM lake
 
 for i in 1 2 3; do
   echo -n "  Запуск $i: "
-  docker compose run --rm duckdb -init init.sql -c ".timer on" -c "${P2_SQL}" 2>&1 | grep "Run Time" || true
+  (echo ".timer on"; echo "${P2_SQL}") | docker compose run --rm -T duckdb -init init.sql 2>&1 | grep -i "Run Time" || true
 done
 
 # 3. Замеры Путь 3: ClickHouse Mart
@@ -42,7 +42,7 @@ P3_SQL="SELECT event_date, sum(events_count) AS cnt FROM mart.agg_hourly_events 
 
 for i in 1 2 3; do
   echo -n "  Запуск $i: "
-  docker compose exec -T warehouse clickhouse-client -u student --password student --time --progress -q "${P3_SQL}" 2>&1 | grep -E 'rows.*bytes|Elapsed:' || true
+  docker compose exec -T warehouse clickhouse-client -u student --password student --time -q "${P3_SQL}" 2>&1 | grep -E 'rows.*bytes|Elapsed:' || true
 done
 
 echo -e "\n${BLUE}================================================================${NC}"
@@ -57,7 +57,7 @@ TRUNCATE TABLE mart.fact_events_scale_test;
 -- Вставка 10 копий суток 2026-10-08 с уникализированными ключами
 INSERT INTO mart.fact_events_scale_test
 SELECT
-    concat(id, '_copy_', toString(number)) AS event_id,
+    concat(event_id, '_copy_', toString(number)) AS event_id,
     concat(event_key, '_copy_', toString(number)) AS event_key,
     event_time,
     event_date,
@@ -83,4 +83,3 @@ DROP TABLE IF EXISTS mart.fact_events_scale_test;
 "
 echo -e "${GREEN}✔ Тестовые таблицы удалены, рабочие наборы сохранены в исходном виде!${NC}"
 echo -e "${GREEN}✔ Бенчмарк и бонусное задание успешно выполнены!${NC}"
-

@@ -1,11 +1,8 @@
 -- jobs/mart_load.sql
--- ЛР5: Пайплайн трансформации данных stg -> core -> mart за сутки {day:Date}
--- Запуск:
---   docker compose exec -T warehouse clickhouse-client -u student --password student \
---     --param_day=YYYY-MM-DD < jobs/mart_load.sql
+-- ЛР5: Пайплайн трансформации данных stg -> core -> mart за сутки __DAY__
 
 -- ============================================================================
--- 1. Слой CORE (Нормализованное ядро с историей SCD Type 2)
+-- 1. Слой CORE (Нормализованное ядро)
 -- ============================================================================
 CREATE DATABASE IF NOT EXISTS core;
 
@@ -37,49 +34,11 @@ PARTITION BY event_date
 ORDER BY (type, repo_id, event_time, id);
 
 -- Идемпотентная перезагрузка суток в ядро
-ALTER TABLE core.events DROP PARTITION IF EXISTS {day:Date};
+ALTER TABLE core.events DROP PARTITION IF EXISTS '__DAY__';
 
 INSERT INTO core.events
 SELECT * FROM stg.events
-WHERE event_date = {day:Date};
-
--- Измерение репозиториев с версионированием SCD Type 2
--- Отслеживает смену имени и класс активности (low < 5, medium 5-20, high > 20)
-CREATE TABLE IF NOT EXISTS core.dim_repo_scd
-(
-    repo_id Int64,
-    repo_name String,
-    activity_class LowCardinality(String),
-    daily_events UInt32,
-    valid_from Date,
-    valid_to Date,
-    is_current UInt8
-)
-ENGINE = ReplacingMergeTree(daily_events)
-ORDER BY (repo_id, valid_from);
-
--- Расчёт суточного среза для SCD2
-INSERT INTO core.dim_repo_scd
-SELECT
-    repo_id,
-    argMax(repo_name, event_time) AS repo_name,
-    multiIf(count() < 5, 'low', count() <= 20, 'medium', 'high') AS activity_class,
-    toUInt32(count()) AS daily_events,
-    {day:Date} AS valid_from,
-    toDate('9999-12-31') AS valid_to,
-    1 AS is_current
-FROM core.events
-WHERE event_date = {day:Date}
-GROUP BY repo_id;
-
--- Закрытие предыдущей версии для репозиториев, у которых изменился класс или имя
-ALTER TABLE core.dim_repo_scd
-UPDATE
-    valid_to = subtractDays({day:Date}, 1),
-    is_current = 0
-WHERE valid_from < {day:Date}
-  AND valid_to = toDate('9999-12-31')
-  AND repo_id IN (SELECT DISTINCT repo_id FROM core.events WHERE event_date = {day:Date});
+WHERE event_date = '__DAY__';
 
 
 -- ============================================================================
@@ -127,36 +86,10 @@ SELECT
     argMax(actor_avatar_url, event_time) AS actor_avatar_url,
     max(event_time) AS updated_at
 FROM core.events
-WHERE event_date = {day:Date}
+WHERE event_date = '__DAY__'
 GROUP BY actor_id;
 
--- 2.3 Измерение репозиториев (копия SCD2 витрины)
-CREATE TABLE IF NOT EXISTS mart.dim_repo
-(
-    repo_id Int64,
-    repo_name String,
-    activity_class LowCardinality(String),
-    daily_events UInt32,
-    valid_from Date,
-    valid_to Date,
-    is_current UInt8
-)
-ENGINE = ReplacingMergeTree(daily_events)
-ORDER BY (repo_id, valid_from);
-
-INSERT INTO mart.dim_repo
-SELECT * FROM core.dim_repo_scd
-WHERE valid_from = {day:Date};
-
-ALTER TABLE mart.dim_repo
-UPDATE
-    valid_to = subtractDays({day:Date}, 1),
-    is_current = 0
-WHERE valid_from < {day:Date}
-  AND valid_to = toDate('9999-12-31')
-  AND repo_id IN (SELECT DISTINCT repo_id FROM core.events WHERE event_date = {day:Date});
-
--- 2.4 Агрегированная таблица для предрасчёта почасовых метрик
+-- 2.3 Агрегированная таблица для предрасчёта почасовых метрик
 CREATE TABLE IF NOT EXISTS mart.agg_hourly_events
 (
     hour DateTime,
@@ -168,7 +101,7 @@ ENGINE = SummingMergeTree(events_count)
 PARTITION BY event_date
 ORDER BY (hour, type_key);
 
--- 2.5 Таблица фактов (Grain: 1 событие GitHub)
+-- 2.4 Таблица фактов (Grain: 1 событие GitHub)
 CREATE TABLE IF NOT EXISTS mart.fact_events
 (
     event_id String,
@@ -185,20 +118,20 @@ ENGINE = MergeTree
 PARTITION BY event_date
 ORDER BY (type_key, repo_id, event_time, event_id);
 
--- 2.6 Материализованное представление для наполнения агрегата
+-- 2.5 Материализованное представление для наполнения агрегата
 CREATE MATERIALIZED VIEW IF NOT EXISTS mart.mv_hourly_events
 TO mart.agg_hourly_events
 AS SELECT
     toStartOfHour(event_time) AS hour,
     event_date,
-    type AS type_key,
+    type_key,
     count() AS events_count
 FROM mart.fact_events
 GROUP BY hour, event_date, type_key;
 
 -- Идемпотентная перезагрузка фактов и агрегатов за указанные сутки
-ALTER TABLE mart.agg_hourly_events DROP PARTITION IF EXISTS {day:Date};
-ALTER TABLE mart.fact_events DROP PARTITION IF EXISTS {day:Date};
+ALTER TABLE mart.agg_hourly_events DROP PARTITION IF EXISTS '__DAY__';
+ALTER TABLE mart.fact_events DROP PARTITION IF EXISTS '__DAY__';
 
 INSERT INTO mart.fact_events
 SELECT
@@ -212,5 +145,63 @@ SELECT
     public,
     1 AS events_count
 FROM core.events
-WHERE event_date = {day:Date};
+WHERE event_date = '__DAY__';
 
+-- ============================================================================
+-- 3. Измерение репозиториев с версионированием SCD Type 2
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS core.dim_repo_scd
+(
+    repo_id Int64,
+    repo_name String,
+    activity_class LowCardinality(String),
+    daily_events UInt32,
+    valid_from Date,
+    valid_to Date,
+    is_current UInt8
+)
+ENGINE = ReplacingMergeTree(daily_events)
+ORDER BY (repo_id, valid_from);
+
+CREATE TABLE IF NOT EXISTS mart.dim_repo
+(
+    repo_id Int64,
+    repo_name String,
+    activity_class LowCardinality(String),
+    daily_events UInt32,
+    valid_from Date,
+    valid_to Date,
+    is_current UInt8
+)
+ENGINE = ReplacingMergeTree(daily_events)
+ORDER BY (repo_id, valid_from);
+
+-- Расчёт SCD2 интервалов версионирования без использования мутаций с подзапросами
+TRUNCATE TABLE IF EXISTS core.dim_repo_scd;
+
+INSERT INTO core.dim_repo_scd
+WITH daily_stats AS (
+    SELECT
+        repo_id,
+        argMax(repo_name, event_time) AS repo_name,
+        multiIf(count() < 5, 'low', count() <= 20, 'medium', 'high') AS activity_class,
+        toUInt32(count()) AS daily_events,
+        event_date AS valid_from
+    FROM core.events
+    GROUP BY repo_id, event_date
+)
+SELECT
+    repo_id,
+    repo_name,
+    activity_class,
+    daily_events,
+    valid_from,
+    leadInFrame(subtractDays(valid_from, 0), 1, toDate('9999-12-31')) OVER (
+        PARTITION BY repo_id ORDER BY valid_from ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING
+    ) AS next_date,
+    if(next_date = toDate('9999-12-31'), toDate('9999-12-31'), subtractDays(next_date, 1)) AS valid_to,
+    if(valid_to = toDate('9999-12-31'), 1, 0) AS is_current
+FROM daily_stats;
+
+TRUNCATE TABLE IF EXISTS mart.dim_repo;
+INSERT INTO mart.dim_repo SELECT * FROM core.dim_repo_scd;

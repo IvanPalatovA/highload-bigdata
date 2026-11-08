@@ -9,8 +9,7 @@ jobs/benchmark_3_paths.py
 Путь 2: Lakehouse (DuckDB над таблицей Iceberg lake.clean.events через Lakekeeper)
 Путь 3: ClickHouse Mart (витрина mart.agg_hourly_events / mart.fact_events)
 
-Вычисляет медиану времени 3 запусков, прочитанный объём данных, число строк,
-проверяет эквивалентность ответов и выполняет тест масштабирования (Бонусное задание).
+Вычисляет медиану времени 3 запусков, проверяет эквивалентность ответов.
 """
 
 import subprocess
@@ -18,7 +17,6 @@ import time
 import statistics
 import sys
 import os
-import json
 
 def run_command(cmd, shell=True):
     start = time.perf_counter()
@@ -27,10 +25,9 @@ def run_command(cmd, shell=True):
     return res.returncode, res.stdout, res.stderr, duration_ms
 
 def bench_path1():
-    # Путь 1: DuckDB over S3 Parquet
     sql = """
     SELECT event_date, count(*) AS cnt
-    FROM read_parquet('s3://lake/clean/events/**/*.parquet', hive_partitioning = true)
+    FROM read_parquet('s3://lake/clean/events/*/*.parquet', hive_partitioning = true)
     WHERE type = 'CreateEvent'
     GROUP BY event_date
     ORDER BY event_date;
@@ -39,7 +36,7 @@ def bench_path1():
     output = ""
     for i in range(3):
         code, out, err, dur = run_command(
-            f'docker compose run --rm duckdb -init init.sql -c "{sql}"'
+            f'docker compose run --rm -T duckdb -init init.sql -c "{sql}"'
         )
         if code != 0:
             print(f"Error in Path 1 run {i+1}: {err}", file=sys.stderr)
@@ -57,7 +54,6 @@ def bench_path1():
     }
 
 def bench_path2():
-    # Путь 2: DuckDB over Iceberg
     sql = """
     SELECT CAST(event_time AS DATE) AS event_date, count(*) AS cnt
     FROM lake.clean.events
@@ -69,7 +65,7 @@ def bench_path2():
     output = ""
     for i in range(3):
         code, out, err, dur = run_command(
-            f'docker compose run --rm duckdb -init init.sql -c "{sql}"'
+            f'docker compose run --rm -T duckdb -init init.sql -c "{sql}"'
         )
         if code != 0:
             print(f"Error in Path 2 run {i+1}: {err}", file=sys.stderr)
@@ -87,7 +83,6 @@ def bench_path2():
     }
 
 def bench_path3():
-    # Путь 3: ClickHouse Mart
     sql = """
     SELECT event_date, sum(events_count) AS cnt
     FROM mart.agg_hourly_events
@@ -97,10 +92,9 @@ def bench_path3():
     """
     times = []
     output = ""
-    processed_stats = ""
     for i in range(3):
         code, out, err, dur = run_command(
-            f'docker compose exec -T warehouse clickhouse-client -u student --password student --time --progress -q "{sql}"'
+            f'docker compose exec -T warehouse clickhouse-client -u student --password student --time -q "{sql}"'
         )
         if code != 0:
             print(f"Error in Path 3 run {i+1}: {err}", file=sys.stderr)
@@ -108,15 +102,13 @@ def bench_path3():
         times.append(dur)
         if i == 0:
             output = out
-            processed_stats = err
 
     median_t = statistics.median(times)
     return {
         "path": "3. ClickHouse Mart (mart.agg_hourly_events)",
         "times": times,
         "median_ms": median_t,
-        "output": output,
-        "stats": processed_stats
+        "output": output
     }
 
 def main():
@@ -147,9 +139,9 @@ def main():
     if p1 and p2 and p3:
         print(f"{p1['path']:<38} | {p1['median_ms']:>8.1f} мс | Эквивалентен")
         print(f"{p2['path']:<38} | {p2['median_ms']:>8.1f} мс | Эквивалентен")
-        print(f"{p3['path']:<38} | {p3['median_ms']:>8.1f} мс | Эквивалентен (x{p2['median_ms']/p3['median_ms']:.1f} быстрее)")
+        speedup = (p2['median_ms'] / p3['median_ms']) if p3['median_ms'] > 0 else 1.0
+        print(f"{p3['path']:<38} | {p3['median_ms']:>8.1f} мс | Эквивалентен (x{speedup:.1f} быстрее)")
     print("=" * 70)
 
 if __name__ == '__main__':
     main()
-

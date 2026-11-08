@@ -88,13 +88,13 @@ docker compose ps | grep -E 'catalog|s3'
 echo -e "${GREEN}✔ Каталог таблиц Lakekeeper и хранилище S3 работают стабильно!${NC}"
 
 # -----------------------------------------------------------------------------
-# ЭТАП 2: Проверка наличия таблицы lake.clean.events и наполнение при необходимости
+# ЭТАП 2: Проверка наличия таблицы lake.clean.events и наполнение данными
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 2/9] Проверка таблицы lake.clean.events...${NC}"
-TABLE_COUNT=$(docker compose run --rm -T duckdb -init init.sql -c "SELECT count(*) FROM lake.clean.events;" 2>&1 | tr -dc '0-9\n' | grep -v '^$' | head -n 1 || true)
+TABLE_COUNT=$(docker compose run --rm -T duckdb -init init.sql -csv -c "SELECT count(*) FROM lake.clean.events;" 2>/dev/null | tail -n 1 | tr -dc '0-9' || true)
 
-if [ -z "$TABLE_COUNT" ] || [ "$TABLE_COUNT" -eq 0 ]; then
-  echo -e "${CYAN}  Таблица пуста или отсутствует. Создаю схему и загружаю данные...${NC}"
+if [ -z "$TABLE_COUNT" ] || [ "$TABLE_COUNT" -lt 1000 ]; then
+  echo -e "${CYAN}  В таблице недостаточно строк (строк: ${TABLE_COUNT:-0}). Создаю схему и загружаю данные...${NC}"
   docker compose run --rm spark /opt/spark/bin/spark-sql -e "
     CREATE NAMESPACE IF NOT EXISTS lake.clean;
     CREATE TABLE IF NOT EXISTS lake.clean.events (
@@ -120,11 +120,11 @@ if [ -z "$TABLE_COUNT" ] || [ "$TABLE_COUNT" -eq 0 ]; then
     PARTITIONED BY (days(event_time));
   " 2>/dev/null || true
 
-  echo -e "${CYAN}  Загружаю суточные данные в Iceberg через jobs/load_all_days.sh...${NC}"
+  echo -e "${CYAN}  Загружаю все 12 суток в Iceberg через jobs/load_all_days.sh...${NC}"
   bash jobs/load_all_days.sh
 fi
 
-TOTAL_ROWS=$(docker compose run --rm -T duckdb -init init.sql -c "SELECT count(*) FROM lake.clean.events;" 2>&1 | tr -dc '0-9\n' | grep -v '^$' | head -n 1 || true)
+TOTAL_ROWS=$(docker compose run --rm -T duckdb -init init.sql -csv -c "SELECT count(*) FROM lake.clean.events;" 2>/dev/null | tail -n 1 | tr -dc '0-9' || true)
 echo "  Всего строк в таблице: ${TOTAL_ROWS}"
 echo -e "${GREEN}✔ Таблица lake.clean.events доступна и наполнена данными (${TOTAL_ROWS} строк)!${NC}"
 
@@ -152,7 +152,7 @@ echo -e "${GREEN}✔ Predicate Pushdown подтверждён: число ск�
 echo -e "\n${YELLOW}>>> [Этап 5/9] Просмотр снимков таблицы и проверка Time Travel...${NC}"
 docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT snapshot_id, committed_at, operation FROM lake.clean.events.snapshots;"
 
-BASE_SNAP=$(docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT snapshot_id FROM lake.clean.events.snapshots ORDER BY committed_at DESC LIMIT 1;" 2>&1 | tr -dc '0-9\n' | grep -E '.{10,}' | head -n 1 || true)
+BASE_SNAP=$(docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT snapshot_id FROM lake.clean.events.snapshots ORDER BY committed_at DESC LIMIT 1;" 2>/dev/null | grep -Eo '[0-9]{15,}' | head -n 1 || true)
 if [ -n "$BASE_SNAP" ]; then
   echo "  Чтение таблицы на момент снимка ${BASE_SNAP}:"
   docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT count(*) AS snapshot_rows FROM lake.clean.events VERSION AS OF ${BASE_SNAP};"
@@ -163,7 +163,7 @@ echo -e "${GREEN}✔ Механизм снимков и Time Travel (VERSION AS 
 # ЭТАП 6: Ошибочная запись и мгновенный откат (Rollback to Snapshot)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 6/9] Демонстрация ошибочной записи и отката (Rollback)...${NC}"
-SNAP_BEFORE=$(docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT snapshot_id FROM lake.clean.events.snapshots ORDER BY committed_at DESC LIMIT 1;" 2>&1 | tr -dc '0-9\n' | grep -E '.{10,}' | head -n 1 || true)
+SNAP_BEFORE=$(docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT snapshot_id FROM lake.clean.events.snapshots ORDER BY committed_at DESC LIMIT 1;" 2>/dev/null | grep -Eo '[0-9]{15,}' | head -n 1 || true)
 
 if [ -n "$SNAP_BEFORE" ]; then
   echo "  Базовый снимок до ошибки: ${SNAP_BEFORE}"
