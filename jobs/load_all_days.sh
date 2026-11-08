@@ -3,12 +3,6 @@
 # ЛР4: Загрузка всех суток clean-слоя в таблицу Iceberg lake.clean.events.
 # Запуск из корня стенда:
 #   bash jobs/load_all_days.sh
-#
-# Требует: duckdb-образ собран, стенд запущен (catalog, s3 working),
-#          data/duckdb/init.sql создан.
-#
-# DuckDB монтирует ./data/duckdb -> /data/duckdb (рабочий каталог).
-# Передаём SQL через stdin, переменную day — через -c.
 
 set -euo pipefail
 
@@ -34,10 +28,7 @@ cd "${STAND_DIR}"
 
 for DAY in "${DAYS[@]}"; do
   echo ">>> Loading day: $DAY"
-  docker compose run --rm duckdb \
-    -init init.sql \
-    -c "SET VARIABLE day = '${DAY}';" \
-    < "${ICEBERG_LOAD_SQL}"
+  (echo "SET VARIABLE day = '${DAY}';"; cat "${ICEBERG_LOAD_SQL}") | docker compose run --rm -T duckdb -init init.sql
   echo "<<< Done: $DAY"
 done
 

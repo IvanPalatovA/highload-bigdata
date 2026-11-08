@@ -91,63 +91,59 @@ echo -e "${GREEN}✔ Каталог таблиц Lakekeeper и хранилищ�
 # ЭТАП 2: Проверка наличия таблицы lake.clean.events и наполнение при необходимости
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 2/9] Проверка таблицы lake.clean.events...${NC}"
-TABLE_CHECK=$(docker compose run --rm duckdb -init init.sql -c "SELECT count(*) FROM lake.clean.events;" 2>&1 || true)
-if echo "$TABLE_CHECK" | grep -qE "does not exist|Catalog Error|not found"; then
-  echo -e "${CYAN}  Инициализирую таблицу lake.clean.events (DDL + загрузка)...${NC}"
-  if ! docker compose run --rm duckdb -init init.sql < jobs/create_table.sql 2>/dev/null; then
-    echo -e "${CYAN}  Создание схемы через Spark SQL с hidden partitioning days(event_time)...${NC}"
-    docker compose run --rm spark /opt/spark/bin/spark-sql -e "
-      CREATE NAMESPACE IF NOT EXISTS lake.clean;
-      CREATE TABLE IF NOT EXISTS lake.clean.events (
-        event_key STRING,
-        event_time TIMESTAMP,
-        received_at STRING,
-        source STRING,
-        id STRING,
-        type STRING,
-        public BOOLEAN,
-        actor_id BIGINT,
-        actor_login STRING,
-        repo_id BIGINT,
-        repo_name STRING,
-        org_id BIGINT,
-        org_login STRING,
-        ref_type STRING,
-        ref STRING,
-        master_branch STRING,
-        description STRING,
-        pusher_type STRING
-      ) USING iceberg
-      PARTITIONED BY (days(event_time));
-    "
-  fi
+TABLE_COUNT=$(docker compose run --rm -T duckdb -init init.sql -c "SELECT count(*) FROM lake.clean.events;" 2>&1 | tr -dc '0-9\n' | grep -v '^$' | head -n 1 || true)
+
+if [ -z "$TABLE_COUNT" ] || [ "$TABLE_COUNT" -eq 0 ]; then
+  echo -e "${CYAN}  Таблица пуста или отсутствует. Создаю схему и загружаю данные...${NC}"
+  docker compose run --rm spark /opt/spark/bin/spark-sql -e "
+    CREATE NAMESPACE IF NOT EXISTS lake.clean;
+    CREATE TABLE IF NOT EXISTS lake.clean.events (
+      event_key STRING,
+      event_time TIMESTAMP,
+      received_at STRING,
+      source STRING,
+      id STRING,
+      type STRING,
+      public BOOLEAN,
+      actor_id BIGINT,
+      actor_login STRING,
+      repo_id BIGINT,
+      repo_name STRING,
+      org_id BIGINT,
+      org_login STRING,
+      ref_type STRING,
+      ref STRING,
+      master_branch STRING,
+      description STRING,
+      pusher_type STRING
+    ) USING iceberg
+    PARTITIONED BY (days(event_time));
+  " 2>/dev/null || true
+
+  echo -e "${CYAN}  Загружаю суточные данные в Iceberg через jobs/load_all_days.sh...${NC}"
   bash jobs/load_all_days.sh
-  docker compose run --rm spark /opt/spark/bin/spark-sql -e "ALTER TABLE lake.clean.events ADD COLUMN IF NOT EXISTS actor_avatar_url STRING;" 2>/dev/null || true
 fi
 
-TOTAL_ROWS=$(docker compose run --rm duckdb -init init.sql -c "SELECT count(*) FROM lake.clean.events;" 2>&1 | grep -E '^[0-9]+$' | head -n 1 || true)
-if [ -z "$TOTAL_ROWS" ]; then
-  TOTAL_ROWS=$(docker compose run --rm duckdb -init init.sql -c "SELECT count(*) FROM lake.clean.events;" 2>&1 | tail -n 2 | head -n 1 | tr -d ' ' || true)
-fi
+TOTAL_ROWS=$(docker compose run --rm -T duckdb -init init.sql -c "SELECT count(*) FROM lake.clean.events;" 2>&1 | tr -dc '0-9\n' | grep -v '^$' | head -n 1 || true)
 echo "  Всего строк в таблице: ${TOTAL_ROWS}"
-echo -e "${GREEN}✔ Таблица lake.clean.events доступна и наполнена данными!${NC}"
+echo -e "${GREEN}✔ Таблица lake.clean.events доступна и наполнена данными (${TOTAL_ROWS} строк)!${NC}"
 
 # -----------------------------------------------------------------------------
 # ЭТАП 3: Проверка схемы и скрытого партиционирования
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 3/9] Проверка структуры колонок таблицы (DESCRIBE)...${NC}"
-docker compose run --rm duckdb -init init.sql -c "DESCRIBE lake.clean.events;"
+docker compose run --rm -T duckdb -init init.sql -c "DESCRIBE lake.clean.events;"
 echo -e "${GREEN}✔ Схема соответствует спецификации Avro v2, скрытое партиционирование days(event_time)!${NC}"
 
 # -----------------------------------------------------------------------------
 # ЭТАП 4: Проверка отсечения файлов (Predicate Pushdown) через EXPLAIN ANALYZE
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 4/9] Проверка Predicate Pushdown (отсечение партиций)...${NC}"
-echo -e "${BLUE}  1. Запрос БЕЗ фильтра (читает все файлы партиций):${NC}"
-docker compose run --rm duckdb -init init.sql -c "EXPLAIN ANALYZE SELECT type, count(*) FROM lake.clean.events GROUP BY 1;"
+echo -e "${BLUE}  1. Запрос БЕЗ фильтра (сканирует файлы всех партиций):${NC}"
+docker compose run --rm -T duckdb -init init.sql -c "EXPLAIN ANALYZE SELECT type, count(*) FROM lake.clean.events GROUP BY 1;"
 
 echo -e "\n${BLUE}  2. Запрос С фильтром по дате (отсекает ненужные файлы через манифест):${NC}"
-docker compose run --rm duckdb -init init.sql -c "EXPLAIN ANALYZE SELECT type, count(*) FROM lake.clean.events WHERE event_time >= TIMESTAMPTZ '2026-10-10 00:00:00' AND event_time < TIMESTAMPTZ '2026-10-11 00:00:00' GROUP BY 1;"
+docker compose run --rm -T duckdb -init init.sql -c "EXPLAIN ANALYZE SELECT type, count(*) FROM lake.clean.events WHERE event_time >= TIMESTAMPTZ '2026-10-10 00:00:00' AND event_time < TIMESTAMPTZ '2026-10-11 00:00:00' GROUP BY 1;"
 echo -e "${GREEN}✔ Predicate Pushdown подтверждён: число сканируемых файлов сократилось до 1!${NC}"
 
 # -----------------------------------------------------------------------------
@@ -156,7 +152,7 @@ echo -e "${GREEN}✔ Predicate Pushdown подтверждён: число ск�
 echo -e "\n${YELLOW}>>> [Этап 5/9] Просмотр снимков таблицы и проверка Time Travel...${NC}"
 docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT snapshot_id, committed_at, operation FROM lake.clean.events.snapshots;"
 
-BASE_SNAP=$(docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT snapshot_id FROM lake.clean.events.snapshots ORDER BY committed_at DESC LIMIT 1;" 2>&1 | grep -E '^[0-9]+$' | head -n 1 || true)
+BASE_SNAP=$(docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT snapshot_id FROM lake.clean.events.snapshots ORDER BY committed_at DESC LIMIT 1;" 2>&1 | tr -dc '0-9\n' | grep -E '.{10,}' | head -n 1 || true)
 if [ -n "$BASE_SNAP" ]; then
   echo "  Чтение таблицы на момент снимка ${BASE_SNAP}:"
   docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT count(*) AS snapshot_rows FROM lake.clean.events VERSION AS OF ${BASE_SNAP};"
@@ -167,13 +163,15 @@ echo -e "${GREEN}✔ Механизм снимков и Time Travel (VERSION AS 
 # ЭТАП 6: Ошибочная запись и мгновенный откат (Rollback to Snapshot)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 6/9] Демонстрация ошибочной записи и отката (Rollback)...${NC}"
-SNAP_BEFORE=$(docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT snapshot_id FROM lake.clean.events.snapshots ORDER BY committed_at DESC LIMIT 1;" 2>&1 | grep -E '^[0-9]+$' | head -n 1 || true)
+SNAP_BEFORE=$(docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT snapshot_id FROM lake.clean.events.snapshots ORDER BY committed_at DESC LIMIT 1;" 2>&1 | tr -dc '0-9\n' | grep -E '.{10,}' | head -n 1 || true)
 
 if [ -n "$SNAP_BEFORE" ]; then
   echo "  Базовый снимок до ошибки: ${SNAP_BEFORE}"
   echo "  1. Имитация ошибочной вставки дубликатов..."
   docker compose run --rm spark /opt/spark/bin/spark-sql -e "
-    INSERT INTO lake.clean.events SELECT * FROM lake.clean.events WHERE event_time >= '2026-10-26 23:00:00';
+    INSERT INTO lake.clean.events (event_key, event_time, received_at, source, id, type, public, actor_id, actor_login, repo_id, repo_name, org_id, org_login, ref_type, ref, master_branch, description, pusher_type)
+    SELECT event_key, event_time, received_at, source, id, type, public, actor_id, actor_login, repo_id, repo_name, org_id, org_login, ref_type, ref, master_branch, description, pusher_type 
+    FROM lake.clean.events WHERE event_time >= '2026-10-26 23:00:00';
     SELECT count(*) AS rows_with_error FROM lake.clean.events;
   "
   echo "  2. Мгновенный откат к снимку ${SNAP_BEFORE}..."
@@ -195,6 +193,7 @@ echo -e "${GREEN}✔ Компакция выполнена: мелкие фай�
 # ЭТАП 8: Эволюция схемы без перезаписи файлов (Schema Evolution)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 8/9] Эволюция схемы (колонка actor_avatar_url)...${NC}"
+docker compose run --rm spark /opt/spark/bin/spark-sql -e "ALTER TABLE lake.clean.events ADD COLUMN actor_avatar_url STRING;" 2>/dev/null || true
 docker compose run --rm spark /opt/spark/bin/spark-sql -e "SELECT actor_avatar_url, count(*) FROM lake.clean.events GROUP BY 1;"
 echo -e "${GREEN}✔ Поле отдаёт NULL для существующих строк — файлы данных не перезаписывались!${NC}"
 
@@ -211,4 +210,3 @@ echo -e "${GREEN}✔ Старые снимки и осиротевшие фай�
 echo -e "\n${BLUE}========================================================================${NC}"
 echo -e "${GREEN}✔ ВСЕ ТРЕБОВАНИЯ ЛАБОРАТОРНОЙ РАБОТЫ №4 УСПЕШНО ВЫПОЛНЕНЫ!               ${NC}"
 echo -e "${BLUE}========================================================================${NC}"
-
