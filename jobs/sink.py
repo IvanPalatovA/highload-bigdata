@@ -89,7 +89,8 @@ def write_batch_to_s3(records, s3_client):
                 f.write(json.dumps(item, default=str) + "\n")
         con.execute(f"COPY (SELECT * FROM read_json_auto('{temp_json}')) TO '{temp_parquet}' (FORMAT parquet, COMPRESSION zstd);")
         s3_key = f"raw/topic/dt={dt_str}/hour={hour_str}/part-0.parquet"
-        s3_client.upload_file(temp_parquet, S3_BUCKET, s3_key)
+        with open(temp_parquet, "rb") as pf:
+            s3_client.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=pf.read())
         if os.path.exists(temp_json):
             os.remove(temp_json)
         if os.path.exists(temp_parquet):
