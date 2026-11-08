@@ -177,3 +177,10 @@ flowchart TD
 - **ClickHouse $\to$ Metabase**: Сервис `bi` (Metabase) на порту 8088 подключается к сервису `warehouse` (ClickHouse) по HTTP-порту 8123 (база `mart`, логин/пароль `student`/`student`) и исполняет аналитические SQL-запросы в реальном времени.
 - **Движок DuckDB**: используется в качестве единого арбитра для сравнительного бенчмарка трёх архитектурных путей.
 
+
+| `raw.topic` | Партиционированные Parquet-файлы потока Kafka | `s3://lake/raw/topic/dt=YYYY-MM-DD/hour=HH/*.parquet` | Регулярная выгрузка потребителем `sink.py` из темы `events` |
+| `events` (тема) | Тема сообщений брокера Apache Kafka | `localhost:9092` / `broker:9092` (3 партиции) | Первичный поток событий с Avro-сериализацией |
+| `lake.clean.events_hourly` | Почасовые агрегаты пакетного конвейера | Iceberg REST Catalog `lake.clean.events_hourly` | Пакетное задание PySpark / Dagster |
+| `mart.events_hourly` | Витрина часовых агрегатов | ClickHouse `mart.events_hourly` | Аналитическая отчетность в Metabase |
+| `lake.clean.events_rt` | Потоковые оконные агрегаты реального времени | Iceberg REST Catalog `lake.clean.events_rt` | Spark Structured Streaming (5-мин окна, watermark 10 мин) |
+| `mart.events_rt` | Витрина реального времени | ClickHouse `mart.events_rt` | Мониторинг потока в Metabase |
