@@ -18,8 +18,15 @@ def main():
         .getOrCreate()
 
     # Схема Avro для парсинга тела сообщения
-    with open("/home/spark/event.avsc" if os.path.exists("/home/spark/event.avsc") else "schemas/event.avsc", "r") as f:
-        avro_schema_json = f.read()
+    schema_paths = ["/opt/jobs/event.avsc", "/home/spark/event.avsc", "schemas/event.avsc", "jobs/event.avsc"]
+    avro_schema_json = None
+    for p in schema_paths:
+        if os.path.exists(p):
+            with open(p, "r") as f:
+                avro_schema_json = f.read()
+            break
+    if not avro_schema_json:
+        raise FileNotFoundError(f"Avro schema not found in {schema_paths}")
 
     # Создание Iceberg-таблицы реального времени, если не существует
     spark.sql("""

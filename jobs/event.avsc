@@ -1,0 +1,115 @@
+{
+  "type": "record",
+  "name": "Event",
+  "namespace": "stand",
+  "doc": "Схема события публичной активности GitHub (GH Archive, Вариант 93, Версия 2)",
+  "fields": [
+    {
+      "name": "event_key",
+      "type": "string",
+      "doc": "Уникальный идемпотентный ключ события (строковый идентификатор GitHub id)"
+    },
+    {
+      "name": "event_time",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "doc": "Время создания события в UTC в миллисекундах с начала эпохи Unix"
+    },
+    {
+      "name": "received_at",
+      "type": "string",
+      "doc": "Время получения события сборщиком стенда в формате ISO 8601 UTC"
+    },
+    {
+      "name": "source",
+      "type": "string",
+      "doc": "Код источника данных по варианту (github)"
+    },
+    {
+      "name": "id",
+      "type": "string",
+      "doc": "Уникальный строковый идентификатор события GitHub"
+    },
+    {
+      "name": "type",
+      "type": "string",
+      "doc": "Тип события GitHub (CreateEvent, DeleteEvent, ReleaseEvent)"
+    },
+    {
+      "name": "public",
+      "type": "boolean",
+      "doc": "Признак публичности события"
+    },
+    {
+      "name": "actor_id",
+      "type": "long",
+      "doc": "Числовой идентификатор пользователя GitHub (actor)"
+    },
+    {
+      "name": "actor_login",
+      "type": "string",
+      "doc": "Логин пользователя GitHub (actor)"
+    },
+    {
+      "name": "repo_id",
+      "type": "long",
+      "doc": "Числовой идентификатор репозитория GitHub"
+    },
+    {
+      "name": "repo_name",
+      "type": "string",
+      "doc": "Полное имя репозитория (owner/name)"
+    },
+    {
+      "name": "org_id",
+      "type": ["null", "long"],
+      "default": null,
+      "doc": "Числовой идентификатор организации (null, если событие вне организации)"
+    },
+    {
+      "name": "org_login",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Логин организации (null, если событие вне организации)"
+    },
+    {
+      "name": "ref_type",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Тип созданного или удалённого объекта: branch, tag, repository (null для ReleaseEvent)"
+    },
+    {
+      "name": "ref",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Имя созданной или удалённой ветки/тега (null, если ref_type repository)"
+    },
+    {
+      "name": "master_branch",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Основная ветка репозитория (null для Delete/Release)"
+    },
+    {
+      "name": "description",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Описание репозитория (null, если не задано)"
+    },
+    {
+      "name": "pusher_type",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Тип инициатора действия (user или deploy_key)"
+    },
+    {
+      "name": "actor_avatar_url",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "URL аватара пользователя GitHub (поле источника, добавленное в Schema v2)"
+    }
+  ]
+}
+
