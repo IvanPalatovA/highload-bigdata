@@ -42,7 +42,7 @@ P3_SQL="SELECT event_date, sum(events_count) AS cnt FROM mart.agg_hourly_events 
 
 for i in 1 2 3; do
   echo -n "  Запуск $i: "
-  docker compose exec -T warehouse clickhouse-client -u student --password student --time -q "${P3_SQL}" 2>&1 | grep -E 'rows.*bytes|Elapsed:' || true
+  docker compose exec -T warehouse clickhouse-client -u student --password student --time -q "${P3_SQL}" 2>&1 | tail -n 1
 done
 
 echo -e "\n${BLUE}================================================================${NC}"
@@ -57,8 +57,8 @@ TRUNCATE TABLE mart.fact_events_scale_test;
 -- Вставка 10 копий суток 2026-10-08 с уникализированными ключами
 INSERT INTO mart.fact_events_scale_test
 SELECT
-    concat(event_id, '_copy_', toString(number)) AS event_id,
-    concat(event_key, '_copy_', toString(number)) AS event_key,
+    concat(event_id, '_copy_', toString(n.number)) AS event_id,
+    concat(event_key, '_copy_', toString(n.number)) AS event_key,
     event_time,
     event_date,
     type_key,
@@ -67,7 +67,7 @@ SELECT
     public,
     1 AS events_count
 FROM mart.fact_events
-CROSS JOIN numbers(10)
+CROSS JOIN numbers(10) AS n
 WHERE event_date = '2026-10-08';
 
 SELECT 'Строк в x10 наборе:' AS metric, count(*) AS cnt FROM mart.fact_events_scale_test;
