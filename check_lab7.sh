@@ -45,6 +45,9 @@ fi
 # ЭТАП 1: Запуск сервисов профиля lab7 (warehouse ClickHouse, s3, catalog)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 1/7] Запуск сервисов DWH ClickHouse, Iceberg Catalog и S3...${NC}"
+sed -i 's/^COMPOSE_FILE=.*/COMPOSE_FILE=compose.yaml:compose.s3-seaweedfs.yaml:compose.engine-duckdb.yaml:compose.bi-metabase.yaml/' .env 2>/dev/null || \
+sed -i '' 's/^COMPOSE_FILE=.*/COMPOSE_FILE=compose.yaml:compose.s3-seaweedfs.yaml:compose.engine-duckdb.yaml:compose.bi-metabase.yaml/' .env 2>/dev/null || true
+
 docker compose --profile lab6 stop >/dev/null 2>&1 || true
 docker compose --profile lab5 up -d warehouse s3 catalog catalog-db
 
