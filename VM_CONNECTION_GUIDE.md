@@ -68,3 +68,4 @@ docker run --rm vm-ssh "cd ~/stand && bash check_lab5.sh"
    docker run --rm vm-ssh "cd ~/stand && git pull origin main && bash check_lab4.sh"
    ```
 4. Если вывод содержит ошибки — анализируешь, исправляешь локально, пушишь и повторяешь шаг 3.
+
