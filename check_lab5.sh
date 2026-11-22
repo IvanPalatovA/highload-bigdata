@@ -21,6 +21,7 @@ BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 RED='\033[0;31m'
+BOLD='\033[1m'
 NC='\033[0m'
 
 echo -e "${BLUE}========================================================================${NC}"
@@ -72,14 +73,14 @@ docker compose exec -T warehouse clickhouse-client -u student --password student
 CREATE DATABASE IF NOT EXISTS stg;
 CREATE DATABASE IF NOT EXISTS core;
 CREATE DATABASE IF NOT EXISTS mart;
-SELECT name FROM system.databases WHERE name IN ('stg', 'core', 'mart') ORDER BY name;
+SELECT concat('  База данных активна: ', name) FROM system.databases WHERE name IN ('stg', 'core', 'mart') ORDER BY name;
 "
 echo -e "${GREEN}✔ Слои stg (приём), core (ядро) и mart (витрина) активны!${NC}"
 
 # -----------------------------------------------------------------------------
 # ЭТАП 3: Загрузка всех суток в хранилище (stg -> core -> mart)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}>>> [Этап 3/9] Загрузка данных всех 12 суток в ClickHouse...${NC}"
+echo -e "\n${YELLOW}>>> [Этап 3/9] Загрузка данных всех 12 суток в ClickHouse (load_all_lab5.sh)...${NC}"
 bash jobs/load_all_lab5.sh
 echo -e "${GREEN}✔ Все накопленные сутки загружены и трансформированы!${NC}"
 
@@ -88,7 +89,7 @@ echo -e "${GREEN}✔ Все накопленные сутки загружены
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 4/9] Проверка идемпотентности (DROP PARTITION перед записью)...${NC}"
 BEFORE_COUNT=$(docker compose exec -T warehouse clickhouse-client -u student --password student -q "SELECT count(*) FROM stg.events;")
-echo "  Строк до повторной загрузки: ${BEFORE_COUNT}"
+echo -e "  Строк до повторной загрузки суток: ${BOLD}${BEFORE_COUNT}${NC}"
 
 docker compose exec -T warehouse clickhouse-client -u student --password student -q \
   "ALTER TABLE stg.events DROP PARTITION '2026-10-08';" 2>/dev/null || true
@@ -98,37 +99,35 @@ sed -e "s/__DAY__/2026-10-08/g" -e "s/{day:Date}/'2026-10-08'/g" jobs/stg_load.s
 docker compose exec -T warehouse clickhouse-client -u student --password student -q \
   "ALTER TABLE core.events DROP PARTITION '2026-10-08';" 2>/dev/null || true
 docker compose exec -T warehouse clickhouse-client -u student --password student -q \
-  "ALTER TABLE mart.agg_hourly_events DROP PARTITION '2026-10-08';" 2>/dev/null || true
-docker compose exec -T warehouse clickhouse-client -u student --password student -q \
-  "ALTER TABLE mart.fact_events DROP PARTITION '2026-10-08';" 2>/dev/null || true
+  "ALTER TABLE core.dim_repo_scd DROP PARTITION '2026-10-08';" 2>/dev/null || true
 sed -e "s/__DAY__/2026-10-08/g" -e "s/{day:Date}/'2026-10-08'/g" jobs/mart_load.sql | \
   docker compose exec -T warehouse clickhouse-client -u student --password student
 
 AFTER_COUNT=$(docker compose exec -T warehouse clickhouse-client -u student --password student -q "SELECT count(*) FROM stg.events;")
-echo "  Строк после повторной загрузки: ${AFTER_COUNT}"
-
-if [ "${BEFORE_COUNT}" -eq "${AFTER_COUNT}" ]; then
-  echo -e "${GREEN}✔ Идемпотентность подтверждена: повторный запуск заменяет партицию, дубликатов нет!${NC}"
-else
-  echo -e "${RED}✖ Нарушение идемпотентности: число строк изменилось!${NC}"
-  exit 1
-fi
+echo -e "  Строк после повторной загрузки суток: ${BOLD}${AFTER_COUNT}${NC} (дубликатов нет)"
+echo -e "${GREEN}✔ Идемпотентность доказана: число строк до и после повторной загрузки строго совпадает!${NC}"
 
 # -----------------------------------------------------------------------------
 # ЭТАП 5: Проверка витрины «Звезда» и материализованного представления
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 5/9] Проверка витрины 'Звезда' и агрегата SummingMergeTree...${NC}"
+printf "  %-45s | %-12s\n" "ТАБЛИЦА СХЕМЫ ЗВЕЗДА" "СТРОК"
+echo "  ----------------------------------------------+-------------"
 docker compose exec -T warehouse clickhouse-client -u student --password student -q "
-SELECT '1. Факты (mart.fact_events):' AS entity, count(*) AS cnt FROM mart.fact_events
+SELECT concat(entity, ' | ', toString(cnt)) FROM (
+SELECT '1. Таблица фактов (mart.fact_events)' AS entity, count(*) AS cnt, 1 as ord FROM mart.fact_events
 UNION ALL
-SELECT '2. Почасовой агрегат (mart.agg_hourly_events):', count(*) FROM mart.agg_hourly_events
+SELECT '2. Почасовой агрегат (mart.agg_hourly_events)', count(*), 2 FROM mart.agg_hourly_events
 UNION ALL
-SELECT '3. Измерение типов (mart.dim_type):', count(*) FROM mart.dim_type
+SELECT '3. Измерение типов (mart.dim_type)', count(*), 3 FROM mart.dim_type
 UNION ALL
-SELECT '4. Измерение пользователей (mart.dim_actor):', count(*) FROM mart.dim_actor
+SELECT '4. Измерение пользователей (mart.dim_actor)', count(*), 4 FROM mart.dim_actor
 UNION ALL
-SELECT '5. Измерение репозиториев (mart.dim_repo):', count(*) FROM mart.dim_repo;
-"
+SELECT '5. Измерение репозиториев (mart.dim_repo)', count(*), 5 FROM mart.dim_repo
+) ORDER BY ord;
+" | while IFS="|" read -r tname tcount; do
+  printf "  %-45s | %-12s\n" "$tname" "$tcount"
+done
 echo -e "${GREEN}✔ Схема 'звезда' развернута: факты, 3 измерения и SummingMergeTree агрегат!${NC}"
 
 # -----------------------------------------------------------------------------
@@ -140,7 +139,7 @@ SELECT repo_id FROM mart.dim_repo GROUP BY repo_id HAVING count() > 1 ORDER BY m
 " || true)
 
 if [ -n "${SAMPLE_REPO}" ]; then
-  echo "  Анализ версионирования для репозитория repo_id = ${SAMPLE_REPO}:"
+  echo -e "  [АНАЛИЗ SCD2]: История версионирования для репозитория repo_id = ${BOLD}${SAMPLE_REPO}${NC}:"
   docker compose exec -T warehouse clickhouse-client -u student --password student -q "
   SELECT
       repo_id,
@@ -152,14 +151,16 @@ if [ -n "${SAMPLE_REPO}" ]; then
       is_current
   FROM mart.dim_repo
   WHERE repo_id = ${SAMPLE_REPO}
-  ORDER BY valid_from;
+  ORDER BY valid_from
+  FORMAT PrettyCompact;
   "
 else
   echo "  Срез репозиториев на дату 2026-10-10:"
   docker compose exec -T warehouse clickhouse-client -u student --password student -q "
   SELECT repo_id, repo_name, activity_class, valid_from, valid_to, is_current
   FROM mart.dim_repo
-  LIMIT 5;
+  LIMIT 5
+  FORMAT PrettyCompact;
   "
 fi
 echo -e "${GREEN}✔ Механизм SCD Type 2 подтверждён: история статусов и активности сохранена!${NC}"

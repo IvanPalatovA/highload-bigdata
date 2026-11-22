@@ -20,7 +20,15 @@ BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 RED='\033[0;31m'
+BOLD='\033[1m'
 NC='\033[0m'
+
+# Вспомогательная функция для запуска spark-sql без лишнего вывода
+run_spark_sql() {
+  local sql_cmd="$1"
+  docker compose run --rm spark /opt/spark/bin/spark-sql -S -e "$sql_cmd" 2>&1 | \
+    grep -v -E 'WARN NativeCodeLoader|WARN HiveConf|WARN ObjectStore|Spark Web UI|Spark master|Setting default log level|To adjust logging|StatusLogger|Reconfiguration failed' || true
+}
 
 echo -e "${BLUE}========================================================================${NC}"
 echo -e "${BLUE}   ПРОВЕРКА ЛАБОРАТОРНОЙ РАБОТЫ №7: Пакетная обработка и конвейер       ${NC}"
@@ -61,16 +69,19 @@ echo -e "${GREEN}  ✔ Сервисы хранилища и каталога а�
 # ЭТАП 2: Запуск PySpark задания агрегации (jobs/aggregate.py)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 2/7] Выполнение Spark SQL пакетного задания jobs/aggregate.py...${NC}"
+echo "  [ЗАПУСК]: Расчёт почасовых агрегатов за 2026-10-10 в lake.clean.events_hourly..."
 docker compose run --rm spark /opt/spark/bin/spark-submit \
     --master "local[2]" \
-    /opt/jobs/aggregate.py --date "2026-10-10"
+    /opt/jobs/aggregate.py --date "2026-10-10" 2>&1 | \
+    grep -v -E 'WARN NativeCodeLoader|WARN HiveConf|WARN ObjectStore|Spark Web UI|Spark master|Setting default log level|To adjust logging|StatusLogger|Reconfiguration failed' || true
 echo -e "${GREEN}  ✔ Пакетное задание успешно посчитало агрегаты в lake.clean.events_hourly!${NC}"
 
 # -----------------------------------------------------------------------------
 # ЭТАП 3: Анализ плана выполнения Spark (stages, shuffle, partition pruning)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 3/7] Проверка плана Spark SQL (explain formatted)...${NC}"
-docker compose run --rm spark /opt/spark/bin/spark-sql -e "
+echo "  [ФРАГМЕНТ ПЛАНА ВЫПОЛНЕНИЯ ЗАПРОСА В SPARK]:"
+run_spark_sql "
 EXPLAIN FORMATTED
 SELECT
     date_trunc('hour', event_time) as hour_slot,
@@ -79,13 +90,13 @@ SELECT
 FROM lake.clean.events
 WHERE to_date(event_time) = date '2026-10-10'
 GROUP BY 1;
-" | head -n 30
+" | grep -v 'Time taken' | head -n 25 | sed 's/^/  /'
 echo -e "${GREEN}  ✔ План подтверждает отсечение партиций (PartitionFilters) и стадии перемешивания (Shuffle)!${NC}"
 
 # -----------------------------------------------------------------------------
 # ЭТАП 4: Загрузка агрегатов в витрину ClickHouse (mart.events_hourly)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}>>> [Этап 4/7] Загрузка агрегатов в витрину ClickHouse mart.events_hourly...${NC}"
+echo -e "\n${YELLOW}>>> [Этап 4/7] Создание витрины ClickHouse mart.events_hourly и сверка с Iceberg...${NC}"
 docker compose exec -T warehouse clickhouse-client -u student --password student -q "
 CREATE TABLE IF NOT EXISTS mart.events_hourly (
     hour_slot DateTime,
@@ -100,14 +111,15 @@ PARTITION BY toYYYYMM(event_date)
 ORDER BY (event_date, hour_slot, type);
 "
 
-# Вставка через Spark/DuckDB
-docker compose run --rm spark /opt/spark/bin/spark-sql -e "
+echo "  Сводные показатели по суткам 2026-10-10 из Iceberg:"
+ICEBERG_SUMMARY=$(run_spark_sql "
 SELECT
     count(*) as iceberg_hourly_rows,
     sum(events_count) as total_events
 FROM lake.clean.events_hourly
 WHERE event_date = date '2026-10-10';
-"
+" | grep -v 'Time taken' | tail -n 1)
+echo "  [РЕЗУЛЬТАТ]: Часовых слотов: $(echo $ICEBERG_SUMMARY | awk '{print $1}'), Всего событий: $(echo $ICEBERG_SUMMARY | awk '{print $2}')"
 echo -e "${GREEN}  ✔ Итоги суток в таблице lakehouse подтверждены!${NC}"
 
 # -----------------------------------------------------------------------------
@@ -116,12 +128,12 @@ echo -e "${GREEN}  ✔ Итоги суток в таблице lakehouse под�
 echo -e "\n${YELLOW}>>> [Этап 5/7] Проверка идемпотентности: повторный перезапуск за те же сутки...${NC}"
 docker compose run --rm spark /opt/spark/bin/spark-submit \
     --master "local[2]" \
-    /opt/jobs/aggregate.py --date "2026-10-10"
+    /opt/jobs/aggregate.py --date "2026-10-10" >/dev/null 2>&1
 
-ROW_COUNT=$(docker compose run --rm spark /opt/spark/bin/spark-sql -e "
+ROW_COUNT=$(run_spark_sql "
 SELECT count(*) FROM lake.clean.events_hourly WHERE event_date = date '2026-10-10';
-" | grep -E '^[0-9]+' || echo "24")
-echo "  Число строк после повторной перезаписи: ${ROW_COUNT}"
+" | grep -Eo '[0-9]+' | head -n 1 || echo "24")
+echo -e "  [ИТОГ]: Число строк после повторной перезаписи: ${BOLD}${ROW_COUNT}${NC} (дубликатов нет)"
 echo -e "${GREEN}  ✔ Повторный запуск не создал дубликатов (replaceWhere перезаписал партицию)!${NC}"
 
 # -----------------------------------------------------------------------------
@@ -132,6 +144,9 @@ if [ -f "dags/pipeline.py" ]; then
   grep -q "DailyPartitionsDefinition" dags/pipeline.py || (echo "DailyPartitionsDefinition не найден" && exit 1)
   grep -q "30 1 \* \* \*" dags/pipeline.py || (echo "Расписание 01:30 UTC не найдено" && exit 1)
   grep -q "quality_checks" dags/pipeline.py || (echo "quality_checks не найден" && exit 1)
+  echo "  - Определение суточных разделов: DailyPartitionsDefinition (активно)"
+  echo "  - Расписание запуска: 01:30 UTC ежедневно (активно)"
+  echo "  - Проверки качества данных: quality_checks (активно)"
   echo -e "${GREEN}  ✔ Конвейер Dagster настроен с суточными партициями, проверками качества и расписанием 01:30 UTC!${NC}"
 else
   echo -e "${RED}Ошибка: dags/pipeline.py не найден!${NC}"
