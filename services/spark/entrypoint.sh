@@ -12,7 +12,6 @@ python3 - <<'PY'
 import os
 import re
 import sys
-import shutil
 
 src = "/opt/stand/conf/spark/spark-defaults.conf"
 dst = "/opt/spark/conf/spark-defaults.conf"
@@ -42,11 +41,5 @@ else:
 lines += ["", "# строки стенда"] + stand
 with open(dst, "w", encoding="utf-8") as f:
     f.write("\n".join(lines) + "\n")
-
-# Копируем log4j2.properties если передан в conf/spark
-log4j_src = "/opt/stand/conf/spark/log4j2.properties"
-log4j_dst = "/opt/spark/conf/log4j2.properties"
-if os.path.isfile(log4j_src):
-    shutil.copyfile(log4j_src, log4j_dst)
 PY
 exec /opt/entrypoint.sh "$@"

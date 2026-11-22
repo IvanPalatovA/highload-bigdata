@@ -28,7 +28,7 @@ NC='\033[0m'
 run_spark_sql() {
   local sql_cmd="$1"
   docker compose run --rm spark /opt/spark/bin/spark-sql -S -e "$sql_cmd" 2>&1 | \
-    grep -v -E 'WARN NativeCodeLoader|WARN HiveConf|WARN ObjectStore|Spark Web UI|Spark master|Setting default log level|To adjust logging' || true
+    grep -v -E "WARN NativeCodeLoader|WARN HiveConf|WARN ObjectStore|Spark Web UI|Spark master|Setting default log level|To adjust logging|StatusLogger|Reconfiguration failed" || true
 }
 
 echo -e "${BLUE}========================================================================${NC}"
