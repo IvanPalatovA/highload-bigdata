@@ -50,31 +50,35 @@ get_sql_scalar() {
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [1/3] Компакция мелких файлов (rewrite_data_files)...${NC}"
 
-# Сначала проверяем, сколько файлов сейчас
 BASE_FILES=$(get_sql_scalar "SELECT count(*) FROM lake.clean.events.files;")
-echo "  1. Текущее количество файлов в таблице: ${BASE_FILES}"
+echo "  1. Исходное количество файлов в таблице: ${BASE_FILES}"
 
-echo "  2. Имитация частого стриминга: вставляем 4 микро-пакета данных за одни сутки..."
+echo "  2. Имитация частого стриминга: генерация россыпи мелких файлов (микро-пакетов)..."
 exec_spark_sql "
 INSERT INTO lake.clean.events 
-SELECT * FROM lake.clean.events WHERE event_time >= '2026-10-26 23:00:00' AND event_time < '2026-10-26 23:15:00';
+SELECT * FROM lake.clean.events WHERE event_time >= '2026-10-26 01:00:00' AND event_time < '2026-10-26 01:30:00';
 " >/dev/null 2>&1
 
 exec_spark_sql "
 INSERT INTO lake.clean.events 
-SELECT * FROM lake.clean.events WHERE event_time >= '2026-10-26 23:15:00' AND event_time < '2026-10-26 23:30:00';
+SELECT * FROM lake.clean.events WHERE event_time >= '2026-10-26 02:00:00' AND event_time < '2026-10-26 02:30:00';
 " >/dev/null 2>&1
 
 exec_spark_sql "
 INSERT INTO lake.clean.events 
-SELECT * FROM lake.clean.events WHERE event_time >= '2026-10-26 23:30:00' AND event_time < '2026-10-26 23:45:00';
+SELECT * FROM lake.clean.events WHERE event_time >= '2026-10-26 03:00:00' AND event_time < '2026-10-26 03:30:00';
+" >/dev/null 2>&1
+
+exec_spark_sql "
+INSERT INTO lake.clean.events 
+SELECT * FROM lake.clean.events WHERE event_time >= '2026-10-26 04:00:00' AND event_time < '2026-10-26 04:30:00';
 " >/dev/null 2>&1
 
 FILES_BEFORE=$(get_sql_scalar "SELECT count(*) FROM lake.clean.events.files;")
 echo -e "     - Файлов данных ПОСЛЕ накопления микро-пакетов: ${RED}${FILES_BEFORE}${NC} (появилась россыпь мелких файлов!)"
 
 echo "  3. Запуск системной процедуры компакции: CALL lake.system.rewrite_data_files..."
-exec_spark_sql "CALL lake.system.rewrite_data_files(table => 'clean.events');" >/dev/null 2>&1
+exec_spark_sql "CALL lake.system.rewrite_data_files(table => 'clean.events', options => map('min-input-files','2'));" >/dev/null 2>&1
 
 FILES_AFTER=$(get_sql_scalar "SELECT count(*) FROM lake.clean.events.files;")
 echo -e "     - Файлов данных ПОСЛЕ компакции: ${GREEN}${FILES_AFTER}${NC}"
