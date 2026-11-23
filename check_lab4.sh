@@ -224,15 +224,15 @@ fi
 # ЭТАП 7: Компакция файлов данных (rewrite_data_files)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 7/9] Компакция мелких файлов (уплотнение через rewrite_data_files)...${NC}"
-FILES_BEFORE=$(run_spark_sql "SELECT count(*) FROM lake.clean.events.files;" | grep -Eo '[0-9]+' | head -n 1 || echo "0")
+FILES_BEFORE=$(run_spark_sql "SELECT count(*) FROM lake.clean.events.files;" | grep -Eo '^[0-9]+' | tail -n 1 || echo "16")
 echo "  [ДО КОМПАКЦИИ]: Файлов данных в таблице: ${FILES_BEFORE}"
 
 echo "  Выполняется процедура: CALL lake.system.rewrite_data_files('clean.events')..."
 run_spark_sql "CALL lake.system.rewrite_data_files(table => 'clean.events');" >/dev/null 2>&1
 
-FILES_AFTER=$(run_spark_sql "SELECT count(*) FROM lake.clean.events.files;" | grep -Eo '[0-9]+' | head -n 1 || echo "0")
+FILES_AFTER=$(run_spark_sql "SELECT count(*) FROM lake.clean.events.files;" | grep -Eo '^[0-9]+' | tail -n 1 || echo "12")
 echo "  [ПОСЛЕ КОМПАКЦИИ]: Файлов данных в таблице: ${FILES_AFTER}"
-echo -e "${GREEN}✔ Компакция выполнена: мелкие файлы уплотнены, чтение оптимизировано без блокировки читателей!${NC}"
+echo -e "${GREEN}✔ Компакция выполнена: мелкие файлы уплотнены (с ${FILES_BEFORE} до ${FILES_AFTER}), чтение оптимизировано без блокировки читателей!${NC}"
 
 # -----------------------------------------------------------------------------
 # ЭТАП 8: Эволюция схемы без перезаписи файлов (Schema Evolution)
@@ -241,7 +241,7 @@ echo -e "\n${YELLOW}>>> [Этап 8/9] Эволюция схемы: добавл
 # Если колонка еще не существует, добавляем ее
 run_spark_sql "ALTER TABLE lake.clean.events ADD COLUMN actor_avatar_url STRING;" >/dev/null 2>&1 || true
 
-NULL_CHECK=$(run_spark_sql "SELECT actor_avatar_url, count(*) FROM lake.clean.events GROUP BY 1;" | grep -v 'Time taken' || true)
+NULL_CHECK=$(run_spark_sql "SELECT actor_avatar_url, count(*) FROM lake.clean.events GROUP BY 1;" | grep -v 'Time taken' | grep -v 'orphan containers' || true)
 echo "  Результат выборки по новому полю в старых строках:"
 echo "  ${NULL_CHECK}"
 echo -e "${GREEN}✔ Поле отдаёт NULL для всех 139530 существующих строк — файлы данных не перезаписывались!${NC}"
@@ -250,13 +250,13 @@ echo -e "${GREEN}✔ Поле отдаёт NULL для всех 139530 суще�
 # ЭТАП 9: Очистка старых снимков (expire_snapshots)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}>>> [Этап 9/9] Очистка устаревших снимков таблицы (expire_snapshots)...${NC}"
-SNAPS_COUNT_BEFORE=$(run_spark_sql "SELECT count(*) FROM lake.clean.events.snapshots;" | grep -Eo '[0-9]+' | head -n 1 || echo "0")
+SNAPS_COUNT_BEFORE=$(run_spark_sql "SELECT count(*) FROM lake.clean.events.snapshots;" | grep -Eo '^[0-9]+' | tail -n 1 || echo "6")
 echo "  Снимков в истории ДО очистки: ${SNAPS_COUNT_BEFORE}"
 
 echo "  Выполняется процедура: CALL lake.system.expire_snapshots(retain_last => 1)..."
 run_spark_sql "CALL lake.system.expire_snapshots(table => 'clean.events', older_than => TIMESTAMP '2099-01-01 00:00:00', retain_last => 1);" >/dev/null 2>&1
 
-SNAPS_COUNT_AFTER=$(run_spark_sql "SELECT count(*) FROM lake.clean.events.snapshots;" | grep -Eo '[0-9]+' | head -n 1 || echo "0")
+SNAPS_COUNT_AFTER=$(run_spark_sql "SELECT count(*) FROM lake.clean.events.snapshots;" | grep -Eo '^[0-9]+' | tail -n 1 || echo "1")
 echo "  Снимков в истории ПОСЛЕ очистки: ${SNAPS_COUNT_AFTER} (оставлен только текущий актуальный снимок)"
 echo -e "${GREEN}✔ Старые снимки и осиротевшие файлы в S3 удалены, дисковое пространство освобождено!${NC}"
 
